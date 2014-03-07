@@ -217,7 +217,7 @@ void update_thread(AllEnvironment<KType> *env) {
                 if (env->in_table[ind]) {
                     // Then it should run updatefn
                     v = updatefn(env->vals[ind]);
-                    v2 = updatefn2(env->vals2[ind]);
+                                v2 = updatefn2(env->vals2[ind]);
                 } else {
                     // Then it should run an insert
                     v = env->val_dist(gen);

@@ -24,6 +24,7 @@
 
 #include <libcuckoo/cuckoohash_config.h> // for SLOT_PER_BUCKET
 #include <libcuckoo/cuckoohash_map.hh>
+#include <libcuckoo/city_hasher.hh>
 #include "test_util.cc"
 
 typedef uint32_t KeyType;
@@ -60,7 +61,7 @@ template <class KType>
 struct thread_args {
     typename std::vector<KType>::iterator begin;
     typename std::vector<KType>::iterator end;
-    cuckoohash_map<KType, ValType>& table;
+    cuckoohash_map<KType, ValType, CityHasher<KType> >& table;
     cacheint* reads;
     bool in_table;
     std::atomic<bool>* finished;
@@ -73,7 +74,7 @@ template <class KType>
 void read_thread(thread_args<KType> rt_args) {
     auto begin = rt_args.begin;
     auto end = rt_args.end;
-    cuckoohash_map<KType, ValType>& table = rt_args.table;
+    cuckoohash_map<KType, ValType, CityHasher<KType> >& table = rt_args.table;
     auto *reads = rt_args.reads;
     auto in_table = rt_args.in_table;
     std::atomic<bool>* finished = rt_args.finished;
@@ -83,7 +84,7 @@ void read_thread(thread_args<KType> rt_args) {
             if (finished->load(std::memory_order_acquire)) {
                 return;
             }
-            ASSERT_EQ(table.find(*begin, v), in_table);
+            ASSERT_EQ(table.find(*it, v), in_table);
             reads->num++;
         }
         if (finished->load(std::memory_order_acquire)) {
@@ -98,7 +99,7 @@ template <class KType>
 void insert_thread(thread_args<KType> it_args) {
     auto begin = it_args.begin;
     auto end = it_args.end;
-    cuckoohash_map<KType, ValType>& table = it_args.table;
+    cuckoohash_map<KType, ValType, CityHasher<KType> >& table = it_args.table;
     for (;begin != end; begin++) {
         if (table.hashpower() > power) {
             print_lock.lock();
@@ -121,7 +122,7 @@ public:
         if (seed == 0) {
             seed = std::chrono::system_clock::now().time_since_epoch().count();
         }
-        std::cout << "seed = " << seed << std::endl;
+        //std::cout << "seed = " << seed << std::endl;
         gen.seed(seed);
 
         // We fill the keys array with integers between numkeys and
@@ -149,11 +150,12 @@ public:
         init_size = table.size();
         ASSERT_TRUE(init_size == keys_per_thread * thread_num);
 
-        std::cout << "Table with capacity " << numkeys << " prefilled to a load factor of " << table.load_factor() << std::endl;
+        //std::cout << "Table with capacity " << numkeys << " prefilled to a load factor of " << table.load_factor() << std::endl;
+        std::cout << numkeys << ", " << table.load_factor() << std::endl;
     }
 
     size_t numkeys;
-    cuckoohash_map<KType, ValType> table;
+    cuckoohash_map<KType, ValType, CityHasher<KType> > table;
     std::vector<KType> keys;
     std::mt19937_64 gen;
     size_t init_size;
@@ -188,13 +190,17 @@ void ReadThroughputTest(ReadEnvironment<KType> *env) {
     }
     size_t total_reads = 0;
     for (size_t i = 0; i < counters.size(); i++) {
+        std::cout << counters[i].num << std::endl;
         total_reads += counters[i].num;
     }
-    // Reports the results
+    /*// Reports the results
     std::cout << "----------Results----------" << std::endl;
     std::cout << "Number of reads:\t" << total_reads << std::endl;
     std::cout << "Time elapsed:\t" << test_len << " seconds" << std::endl;
-    std::cout << "Throughput: " << std::fixed << total_reads / (double)test_len << " reads/sec" << std::endl;
+    std::cout << "Throughput: " << std::fixed << total_reads / (double)test_len << " reads/sec" << std::endl;*/
+    std::cout << ", " << total_reads;
+    std::cout << ", " << test_len;
+    std::cout << ", " << total_reads / (double)test_len << std::endl;
 }
 
 int main(int argc, char** argv) {

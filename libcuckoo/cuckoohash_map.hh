@@ -226,6 +226,15 @@ public:
         return s;
     }
 
+    //number of upserts that led to updates rather than inserts
+    size_t number_updates() {
+        check_hazard_pointer();
+        const TableInfo *ti = snapshot_table_nolock();
+        const size_t s = update_size(ti);
+        unset_hazard_pointer();
+        return s;
+    }
+
     /*! empty returns true if the table is empty. */
     bool empty() {
         return size() == 0;
@@ -376,6 +385,7 @@ public:
 
         const cuckoo_status st = cuckoo_update_fn(key, fn, hv, ti, i1, i2);
         if (st == ok) {
+            ti->num_updates[counterid].num.fetch_add(1, std::memory_order_relaxed);
             unlock_two(ti, i1, i2);
             unset_hazard_pointer();
             return true;
@@ -506,6 +516,7 @@ private:
         // per-core counters for the number of inserts and deletes
         std::vector<cacheint> num_inserts;
         std::vector<cacheint> num_deletes;
+        std::vector<cacheint> num_updates;
 
         /* The constructor allocates the memory for the table. For
          * buckets, it uses the bucket_allocator, so that we can free
@@ -524,6 +535,8 @@ private:
                 locks_ = new locktype[kNumLocks];
                 num_inserts.resize(kNumCores);
                 num_deletes.resize(kNumCores);
+                num_updates.resize(kNumCores);
+
             } catch (const std::bad_alloc&) {
                 if (buckets_ != nullptr) {
                     bucket_allocator.deallocate(buckets_, hashsize(hashpower_));
@@ -1442,6 +1455,7 @@ private:
         for (size_t i = 0; i < ti->num_inserts.size(); i++) {
             ti->num_inserts[i].num.store(0);
             ti->num_deletes[i].num.store(0);
+            ti->num_updates[i].num.store(0);
         }
         return ok;
     }
@@ -1456,6 +1470,14 @@ private:
             deletes += ti->num_deletes[i].num.load();
         }
         return inserts-deletes;
+    }
+
+    size_t update_size(const TableInfo *ti) {
+        size_t updates = 0;
+        for (size_t i = 0; i < ti->num_updates.size(); i++) {
+            updates += ti->num_updates[i].num.load();
+        }
+        return updates;
     }
 
     /* cuckoo_loadfactor returns the load factor of the given table. */

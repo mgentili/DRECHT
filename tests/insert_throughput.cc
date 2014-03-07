@@ -23,6 +23,7 @@
 
 #include <libcuckoo/cuckoohash_config.h> // for SLOT_PER_BUCKET
 #include <libcuckoo/cuckoohash_map.hh>
+#include <libcuckoo/city_hasher.hh>
 #include "test_util.cc"
 
 typedef uint32_t KeyType;
@@ -50,7 +51,7 @@ bool use_strings = false;
 
 // Inserts the keys in the given range (with value 0), exiting if there is an expansion
 template <class KType>
-void insert_thread(cuckoohash_map<KType, ValType>& table,
+void insert_thread(cuckoohash_map<KType, ValType, CityHasher<KType> >& table,
                    typename std::vector<KType>::iterator begin,
                    typename std::vector<KType>::iterator end) {
     for (;begin != end; begin++) {
@@ -73,7 +74,7 @@ public:
         if (seed == 0) {
             seed = std::chrono::system_clock::now().time_since_epoch().count();
         }
-        std::cout << "seed = " << seed << std::endl;
+        //std::cout << "seed = " << seed << std::endl;
         gen.seed(seed);
 
         // We fill the keys array with integers between numkeys and
@@ -99,11 +100,12 @@ public:
         init_size = table.size();
         ASSERT_TRUE(init_size == keys_per_thread * thread_num);
 
-        std::cout << "Table with capacity " << numkeys << " prefilled to a load factor of " << table.load_factor() << std::endl;
+        //std::cout << "Table with capacity " << numkeys << " prefilled to a load factor of " << table.load_factor() << std::endl;
+        std::cout << numkeys << ", " << table.load_factor();
     }
 
     size_t numkeys;
-    cuckoohash_map<KType, ValType> table;
+    cuckoohash_map<KType, ValType, CityHasher<KType> > table;
     std::vector<KType> keys;
     std::mt19937_64 gen;
     size_t init_size;
@@ -126,11 +128,15 @@ void InsertThroughputTest(InsertEnvironment<KType> *env) {
     elapsed_time += (t2.tv_usec - t1.tv_usec) / 1000.0; // us to ms
     size_t num_inserts = env->table.size() - env->init_size;
     // Reports the results
-    std::cout << "----------Results----------" << std::endl;
+    /*std::cout << "----------Results----------" << std::endl;
     std::cout << "Final load factor:\t" << env->table.load_factor() << std::endl;
     std::cout << "Number of inserts:\t" << num_inserts << std::endl;
     std::cout << "Time elapsed:\t" << elapsed_time/1000 << " seconds" << std::endl;
-    std::cout << "Throughput: " << std::fixed << (double)num_inserts / (elapsed_time/1000) << " inserts/sec" << std::endl;
+    std::cout << "Throughput: " << std::fixed << (double)num_inserts / (elapsed_time/1000) << " inserts/sec" << std::endl;*/
+    std::cout << ", " << env->table.load_factor();
+    std::cout << ", " << num_inserts;
+    std::cout << ", " << elapsed_time/1000;
+    std::cout << ", " << (double)num_inserts / (elapsed_time/1000) << std::endl;
 }
 
 int main(int argc, char** argv) {
