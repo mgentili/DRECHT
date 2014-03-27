@@ -465,6 +465,7 @@ private:
         partial_t partials[SLOT_PER_BUCKET];
         key_type keys[SLOT_PER_BUCKET];
         mapped_type vals[SLOT_PER_BUCKET];
+        bool hasmoved;
 
         void setKV(size_t pos, const key_type& k, const mapped_type& v) {
             occupied.set(pos);
@@ -476,6 +477,7 @@ private:
             occupied.reset(pos);
             (keys+pos)->~key_type();
             (vals+pos)->~mapped_type();
+            hasmoved = true;
         }
 
         void clear() {
@@ -1196,6 +1198,7 @@ private:
                                   const size_t i, int& j) {
         j = -1;
         bool found_empty = false;
+
         for (size_t k = 0; k < SLOT_PER_BUCKET; k++) {
             if (ti->buckets_[i].occupied[k]) {
                 if (!is_simple && partial != ti->buckets_[i].partials[k]) {
@@ -1208,6 +1211,10 @@ private:
                 if (!found_empty) {
                     found_empty = true;
                     j = k;
+                    if (!ti->buckets_[i].hasmoved) {
+                        //std::cout << "No move yet" << std::endl;
+                        break;
+                    }
                 }
             }
         }
@@ -1304,26 +1311,56 @@ private:
         mapped_type oldval;
         int res1, res2;
         const partial_t partial = partial_key(hv);
-        if (!try_add_to_bucket(ti, partial, key, val, i1, res1)) {
+
+        //shortcut if nothing has been moved to an alternative bucket yet 
+        if (!ti->buckets_[i1].hasmoved) {
+            if(!try_add_to_bucket(ti, partial, key, val, i1, res1)) {
+                unlock_two(ti, i1, i2);
+                return failure_key_duplicated;
+            }
+
+            if(res1 != -1) {
+                //std::cout << "Successful shortcut" << std::endl;
+                add_to_bucket(ti, partial, key, val, i1, res1);
+                unlock_two(ti, i1, i2);
+                return ok;
+            }
+
+            if (!try_add_to_bucket(ti, partial, key, val, i2, res2)) {
+                unlock_two(ti, i1, i2);
+                return failure_key_duplicated;
+            }
+
+            if (res2 != -1) {
+                add_to_bucket(ti, partial, key, val, i2, res2);
+                unlock_two(ti, i1, i2);
+                return ok;
+            }
+        } else {
+            if (!try_add_to_bucket(ti, partial, key, val, i1, res1)) {
             unlock_two(ti, i1, i2);
             return failure_key_duplicated;
-        }
-        if (!try_add_to_bucket(ti, partial, key, val, i2, res2)) {
-            unlock_two(ti, i1, i2);
-            return failure_key_duplicated;
-        }
-        if (res1 != -1) {
-            add_to_bucket(ti, partial, key, val, i1, res1);
-            unlock_two(ti, i1, i2);
-            return ok;
-        }
-        if (res2 != -1) {
-            add_to_bucket(ti, partial, key, val, i2, res2);
-            unlock_two(ti, i1, i2);
-            return ok;
+            }
+
+            if (!try_add_to_bucket(ti, partial, key, val, i2, res2)) {
+                unlock_two(ti, i1, i2);
+                return failure_key_duplicated;
+            }
+            if (res1 != -1) {
+                add_to_bucket(ti, partial, key, val, i1, res1);
+                unlock_two(ti, i1, i2);
+                return ok;
+            }
+            //std::cout << "Have to check second bucket" << std::endl;
+            if (res2 != -1) {
+                add_to_bucket(ti, partial, key, val, i2, res2);
+                unlock_two(ti, i1, i2);
+                return ok;
+            }
         }
 
         // we are unlucky, so let's perform cuckoo hashing
+        //std::cout << "Have to run cuckoo hashing" << std::endl;
         size_t insert_bucket = 0;
         size_t insert_slot = 0;
         cuckoo_status st = run_cuckoo(ti, i1, i2, insert_bucket, insert_slot);
