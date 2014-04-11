@@ -600,13 +600,7 @@ private:
 
     static inline bool check_version_two(const size_t v1_i, const size_t v2_i,
                                          const size_t v1_f, const size_t v2_f) {
-        bool res = check_version(v1_i,v1_f) && check_version(v2_i, v2_f);
-        //std::cout << "Versions " << v1_i << v1_f << v2_i << v2_f << std::endl;
-        /*if (!res) {
-            std::cout << "Different versions " << v1_i << v1_f << v2_i << v2_f << std::endl;
-        }*/
-        return res;
-        //return check_version(v1_i,v1_f) && check_version(v2_i, v2_f);
+        return check_version(v1_i,v1_f) && check_version(v2_i, v2_f);
     }
 
     //TODO: Understand memory orders? stop applying version_ind() twice.
@@ -637,31 +631,9 @@ private:
     /* end_inc_version increments the version number from 1 mod 2 to 0 mod 2 (effectively
      * unlocking a writer lock)
      */
-    static inline void end_inc_version_given_version(const TableInfo *ti, const size_t i, size_t& v) {
-        assert( v%2 == 1); //nobody should have been able to touch this version
-        ti->versions_[version_ind(i)].num.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    static inline void end_inc_version_two_given_version(const TableInfo *ti, size_t i1, size_t i2,
-                                           size_t& v1, size_t& v2) {
-        i1 = version_ind(i1);
-        i2 = version_ind(i2);
-        end_inc_version_given_version(ti, i1, v1);
-        if (i1 != i2) {
-            end_inc_version_given_version(ti, i2, v2);
-        }
-    }
-
-    /* Use when we've forgotten what the version number was
-     */
     static inline void end_inc_version(const TableInfo *ti, const size_t i, size_t& v) {
-        //std::cout << "End inc version with version: " << v << std::endl;
-        get_version(ti, i, v);
-        //std::cout << "End inc version after getting: " << v << std::endl;
-        end_inc_version_given_version(ti, i, v);
-        get_version(ti, i, v);
-        //std::cout << "End inc version is finished: " << v << std::endl;
-
+        //nobody should have been able to touch this version
+        ti->versions_[version_ind(i)].num.fetch_add(1, std::memory_order_relaxed);
     }
 
     static inline void end_inc_version_two(const TableInfo *ti, size_t i1, size_t i2,
