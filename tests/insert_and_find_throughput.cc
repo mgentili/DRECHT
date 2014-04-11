@@ -23,7 +23,7 @@
 
 #include <libcuckoo/cuckoohash_config.h> // for SLOT_PER_BUCKET
 #include <libcuckoo/cuckoohash_map.hh>
-#include <libcuckoo/city_hasher.hh>
+//#include <libcuckoo/city_hasher.hh>
 #include "test_util.cc"
 
 //typedef uint32_t KeyType;

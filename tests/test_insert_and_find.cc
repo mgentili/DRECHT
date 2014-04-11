@@ -12,6 +12,7 @@
 
 #include <libcuckoo/cuckoohash_config.h> // for SLOT_PER_BUCKET
 #include <libcuckoo/cuckoohash_map.hh>
+//#include <libcuckoo/city_hasher.hh>
 #include "test_util.cc"
 
 typedef uint32_t KeyType;
@@ -34,6 +35,7 @@ public:
         for (size_t i = 0; i < numkeys; i++) {
             keys[i] = i;
             vals[i] = v_dist(gen);
+            //std::cout << "Inserting key #" << i << std::endl;
             EXPECT_TRUE(smalltable.insert(keys[i], vals[i]));
             EXPECT_TRUE(bigtable.insert(keys[i], vals[i]));
         }
@@ -48,8 +50,8 @@ public:
         }
     }
 
-    cuckoohash_map<KeyType, ValType> smalltable;
-    cuckoohash_map<KeyType, ValType> bigtable;
+    cuckoohash_map<KeyType, ValType, CityHasher<KeyType> > smalltable;
+    cuckoohash_map<KeyType, ValType, CityHasher<KeyType> > bigtable;
     KeyType keys[numkeys];
     ValType vals[numkeys];
     KeyType nonkeys[numkeys];

@@ -28,26 +28,6 @@ template <class Key, class T, class Hash = std::hash<Key>, class Pred = std::equ
 class cuckoohash_map {
 
     // Structs and functions used internally
-    class spinlock {
-        std::atomic_flag lock_;
-    public:
-        spinlock() {
-            lock_.clear();
-        }
-
-        inline void lock() {
-            while (lock_.test_and_set(std::memory_order_acquire));
-        }
-
-        inline void unlock() {
-            lock_.clear(std::memory_order_release);
-        }
-
-        inline bool try_lock() {
-            return !lock_.test_and_set(std::memory_order_acquire);
-        }
-
-    } __attribute__((aligned(64)));
 
     typedef enum {
         ok = 0,
@@ -230,9 +210,24 @@ public:
     size_t number_updates() {
         check_hazard_pointer();
         const TableInfo *ti = snapshot_table_nolock();
-        const size_t s = update_size(ti);
+        size_t updates = 0;
+        for (size_t i = 0; i < ti->num_updates.size(); i++) {
+            updates += ti->num_updates[i].num.load();
+        }
         unset_hazard_pointer();
-        return s;
+        return updates;
+    }
+
+    size_t number_retries() {
+        check_hazard_pointer();
+        const TableInfo *ti = snapshot_table_nolock();
+        size_t retries = 0;
+        for (size_t i = 0; i < ti->num_retries.size(); i++) {
+            //std::cout << "Num retries" << ti->num_retries[i].num.load();
+            retries += ti->num_retries[i].num.load();
+        }
+        unset_hazard_pointer();
+        return retries;
     }
 
     /*! empty returns true if the table is empty. */
@@ -273,15 +268,16 @@ public:
      * the associated value it finds in \p val. */
     bool find(const key_type& key, mapped_type& val) {
         check_hazard_pointer();
+        check_counterid(); //TODO: Remove when not counting reads
         size_t hv = hashed_key(key);
         TableInfo *ti;
         size_t i1, i2, v1_i, v2_i, v1_f, v2_f;
         cuckoo_status st;
-        
         do {
             snapshot_and_get_version_two(hv, ti, i1, i2, v1_i, v2_i);
             st = cuckoo_find(key, val, hv, ti, i1, i2);
             get_version_two(ti, i1, i2, v1_f, v2_f);
+            ti->num_retries[counterid].num.fetch_add(1, std::memory_order_relaxed);
         } while(!check_version_two(v1_i, v2_i, v1_f, v2_f));
         
         unset_hazard_pointer();
@@ -503,9 +499,6 @@ private:
         }
     } __attribute__((aligned(64)));
 
-    // An alias for the type of lock we are using
-    typedef spinlock locktype;
-
     /* TableInfo contains the entire state of the hashtable. We
      * allocate one TableInfo pointer per hash table and store all of
      * the table memory in it, so that all the data can be atomically
@@ -517,9 +510,6 @@ private:
         // unique pointer to the array of buckets
         Bucket* buckets_;
 
-        // unique pointer to the array of locks
-        locktype* locks_;
-
         // unique pointer to the array of versions
         cacheint* versions_;
 
@@ -528,6 +518,9 @@ private:
         std::vector<cacheint> num_deletes;
         std::vector<cacheint> num_updates;
 
+        // counter for the number of find retries
+        std::vector<cacheint> num_retries;
+
         /* The constructor allocates the memory for the table. For
          * buckets, it uses the bucket_allocator, so that we can free
          * memory independently of calling its destructor. It
@@ -535,25 +528,22 @@ private:
          * num_deletes. */
         TableInfo(const size_t hashtable_init) {
             buckets_ = nullptr;
-            locks_ = nullptr;
+            versions_ = nullptr;
             try {
                 hashpower_ = hashtable_init;
                 buckets_ = bucket_allocator.allocate(hashsize(hashpower_));
                 for (size_t i = 0; i < hashsize(hashpower_); i++) {
                     bucket_allocator.construct(buckets_+i);
                 }
-                locks_ = new locktype[kNumLocks];
                 versions_ = new cacheint[kNumVersions];
                 num_inserts.resize(kNumCores);
                 num_deletes.resize(kNumCores);
                 num_updates.resize(kNumCores);
+                num_retries.resize(kNumCores);
 
             } catch (const std::bad_alloc&) {
                 if (buckets_ != nullptr) {
                     bucket_allocator.deallocate(buckets_, hashsize(hashpower_));
-                }
-                if (locks_ != nullptr) {
-                    delete[] locks_;
                 }
                 if (versions_ != nullptr) {
                     delete[] versions_;
@@ -567,7 +557,6 @@ private:
                 buckets_[i].clear();
             }
             bucket_allocator.deallocate(buckets_, hashsize(hashpower_));
-            delete[] locks_;
             delete[] versions_;
         }
 
@@ -613,9 +602,9 @@ private:
                                          const size_t v1_f, const size_t v2_f) {
         bool res = check_version(v1_i,v1_f) && check_version(v2_i, v2_f);
         //std::cout << "Versions " << v1_i << v1_f << v2_i << v2_f << std::endl;
-        if (!res) {
+        /*if (!res) {
             std::cout << "Different versions " << v1_i << v1_f << v2_i << v2_f << std::endl;
-        }
+        }*/
         return res;
         //return check_version(v1_i,v1_f) && check_version(v2_i, v2_f);
     }
@@ -650,10 +639,7 @@ private:
      */
     static inline void end_inc_version_given_version(const TableInfo *ti, const size_t i, size_t& v) {
         assert( v%2 == 1); //nobody should have been able to touch this version
-        while(!ti->versions_[version_ind(i)].num.compare_exchange_weak(v, (size_t) v+1, 
-                                                                    std::memory_order_release,
-                                                                    std::memory_order_relaxed));
-        //assert(ti->versions_[version_ind(i)].num.compare_exchange_strong(v, (size_t) v+1));
+        ti->versions_[version_ind(i)].num.fetch_add(1, std::memory_order_relaxed);
     }
 
     static inline void end_inc_version_two_given_version(const TableInfo *ti, size_t i1, size_t i2,
@@ -751,9 +737,9 @@ private:
     /* unlock_three unlocks the three given buckets */
     static inline void end_inc_version_three(const TableInfo *ti, size_t i1,
                                     size_t i2, size_t i3, size_t& v1, size_t& v2, size_t& v3) {
-        i1 = lock_ind(i1);
-        i2 = lock_ind(i2);
-        i3 = lock_ind(i3);
+        i1 = version_ind(i1);
+        i2 = version_ind(i2);
+        i3 = version_ind(i3);
         end_inc_version(ti, i1, v1);
         if (i2 != i1) {
             end_inc_version(ti, i2, v2);
@@ -825,105 +811,6 @@ private:
             end_inc_version(ti, i, dummy);
         }
     }
-    /* lock locks the given bucket index. */
-    static inline void lock(const TableInfo *ti, const size_t i) {
-        ti->locks_[lock_ind(i)].lock();
-    }
-
-    /* unlock unlocks the given bucket index. */
-    static inline void unlock(const TableInfo *ti, const size_t i) {
-        ti->locks_[lock_ind(i)].unlock();
-    }
-
-    /* lock_two locks the two bucket indexes, always locking the
-     * earlier index first to avoid deadlock. If the two indexes are
-     * the same, it just locks one. */
-    static inline void lock_two(const TableInfo *ti, size_t i1, size_t i2) {
-        i1 = lock_ind(i1);
-        i2 = lock_ind(i2);
-        if (i1 < i2) {
-            ti->locks_[i1].lock();
-            ti->locks_[i2].lock();
-        } else if (i2 < i1) {
-            ti->locks_[i2].lock();
-            ti->locks_[i1].lock();
-        } else {
-            ti->locks_[i1].lock();
-        }
-    }
-
-    /* unlock_two unlocks both of the given bucket indexes, or only
-     * one if they are equal. Order doesn't matter here. */
-    static inline void unlock_two(const TableInfo *ti, size_t i1, size_t i2) {
-        i1 = lock_ind(i1);
-        i2 = lock_ind(i2);
-        ti->locks_[i1].unlock();
-        if (i1 != i2) {
-            ti->locks_[i2].unlock();
-        }
-    }
-
-    /* lock_three locks the three bucket indexes in numerical
-     * order. */
-    static inline void lock_three(const TableInfo *ti, size_t i1,
-                                  size_t i2, size_t i3) {
-        i1 = lock_ind(i1);
-        i2 = lock_ind(i2);
-        i3 = lock_ind(i3);
-        // If any are the same, we just run lock_two
-        if (i1 == i2) {
-            lock_two(ti, i1, i3);
-        } else if (i2 == i3) {
-            lock_two(ti, i1, i3);
-        } else if (i1 == i3) {
-            lock_two(ti, i1, i2);
-        } else {
-            if (i1 < i2) {
-                if (i2 < i3) {
-                    ti->locks_[i1].lock();
-                    ti->locks_[i2].lock();
-                    ti->locks_[i3].lock();
-                } else if (i1 < i3) {
-                    ti->locks_[i1].lock();
-                    ti->locks_[i3].lock();
-                    ti->locks_[i2].lock();
-                } else {
-                    ti->locks_[i3].lock();
-                    ti->locks_[i1].lock();
-                    ti->locks_[i2].lock();
-                }
-            } else if (i2 < i3) {
-                if (i1 < i3) {
-                    ti->locks_[i2].lock();
-                    ti->locks_[i1].lock();
-                    ti->locks_[i3].lock();
-                } else {
-                    ti->locks_[i2].lock();
-                    ti->locks_[i3].lock();
-                    ti->locks_[i1].lock();
-                }
-            } else {
-                ti->locks_[i3].lock();
-                ti->locks_[i2].lock();
-                ti->locks_[i1].lock();
-            }
-        }
-    }
-
-    /* unlock_three unlocks the three given buckets */
-    static inline void unlock_three(const TableInfo *ti, size_t i1,
-                                    size_t i2, size_t i3) {
-        i1 = lock_ind(i1);
-        i2 = lock_ind(i2);
-        i3 = lock_ind(i3);
-        ti->locks_[i1].unlock();
-        if (i2 != i1) {
-            ti->locks_[i2].unlock();
-        }
-        if (i3 != i1 && i3 != i2) {
-            ti->locks_[i3].unlock();
-        }
-    }
 
     /* snapshot_table_nolock loads the table info pointer and sets the
      * hazard pointer, whithout locking anything. There is a
@@ -943,54 +830,10 @@ private:
         ti = table_info.load();
         *hazard_pointer = static_cast<void*>(ti);
         if (ti != table_info.load()) {
+            std::cout << "Table info changed!" << std::endl;
             goto TryAcquire;
         }
         return ti;
-    }
-
-    /* snapshot_and_lock_two loads the table_info pointer and locks
-     * the buckets associated with the given hash value. It stores the
-     * table_info and the two locked buckets in reference variables.
-     * Since the positions of the bucket locks depends on the number
-     * of buckets in the table, the table_info pointer needs to be
-     * grabbed first. */
-    void snapshot_and_lock_two(const size_t hv, TableInfo*& ti,
-                               size_t& i1, size_t& i2) {
-    TryAcquire:
-        ti = table_info.load();
-        *hazard_pointer = static_cast<void*>(ti);
-        if (ti != table_info.load()) {
-            goto TryAcquire;
-        }
-        i1 = index_hash(ti, hv);
-        i2 = alt_index(ti, hv, i1);
-        lock_two(ti, i1, i2);
-        if (ti != table_info.load()) {
-            unlock_two(ti, i1, i2);
-            goto TryAcquire;
-        }
-    }
-
-    /* snapshot_and_lock_all is similar to snapshot_and_lock_two,
-     * except that functions that call this are expected to hold the
-     * expansion_lock mutex, so multiple calls to this function cannot
-     * take place at the same time. Therefore, we don't need to
-     * re-check the loaded table_info. */
-    TableInfo *snapshot_and_lock_all() {
-        assert(!expansion_lock.try_lock());
-        TableInfo *ti = table_info.load();
-        *hazard_pointer = static_cast<void*>(ti);
-        for (size_t i = 0; i < kNumLocks; i++) {
-            ti->locks_[i].lock();
-        }
-        return ti;
-    }
-
-    /* unlock_all releases all the locks */
-    inline void unlock_all(TableInfo *ti) {
-        for (size_t i = 0; i < kNumLocks; i++) {
-            ti->locks_[i].unlock();
-        }
     }
 
     // true if the key is small and simple, which means using partial
@@ -1006,11 +849,9 @@ private:
     // size of a bucket in bytes
     static const size_t kBucketSize = sizeof(Bucket);
 
-    // number of locks in the locks_ array
-    static const size_t kNumLocks = 1 << 13;
-
     // number of version counters in the versions_ array
-    static const size_t kNumVersions = 1 << 13;
+    // TODO: Make dynamic?
+    static const size_t kNumVersions = 1 << 12;
 
     // number of cores on the machine
     static const size_t kNumCores;
@@ -1021,12 +862,6 @@ private:
 
     // The maximum depth of a BFS path
     static const size_t MAX_BFS_DEPTH = 4;
-
-    /* lock_ind converts an index into buckets_ to an index into
-     * locks_. */
-    static inline size_t lock_ind(const size_t bucket_ind) {
-        return bucket_ind & (kNumLocks - 1);
-    }
 
     /* version_ind converts an index into buckets_ to an index into
      * versions_. */
@@ -1582,6 +1417,7 @@ private:
         if (!ti->buckets_[i1].hasmoved) {
             if(!try_add_to_bucket(ti, partial, key, val, i1, res1)) {
                 end_inc_version_two(ti, i1, i2, v1, v2);
+                std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
                 return failure_key_duplicated;
             }
 
@@ -1594,6 +1430,7 @@ private:
 
             if (!try_add_to_bucket(ti, partial, key, val, i2, res2)) {
                 end_inc_version_two(ti, i1, i2, v1, v2);
+                std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
                 return failure_key_duplicated;
             }
 
@@ -1603,13 +1440,16 @@ private:
                 return ok;
             }
         } else {
+            //std::cout << "Bucket had a moved thing" << std::endl;
             if (!try_add_to_bucket(ti, partial, key, val, i1, res1)) {
                 end_inc_version_two(ti, i1, i2, v1, v2);
+                std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
                 return failure_key_duplicated;
             }
 
             if (!try_add_to_bucket(ti, partial, key, val, i2, res2)) {
                 end_inc_version_two(ti, i1, i2, v1, v2);
+                std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
                 return failure_key_duplicated;
             }
             if (res1 != -1) {
@@ -1626,7 +1466,7 @@ private:
         }
 
         // we are unlucky, so let's perform cuckoo hashing
-        std::cout << "Have to run cuckoo hashing" << std::endl;
+        //std::cout << "Have to run cuckoo hashing" << std::endl;
         size_t insert_bucket = 0;
         size_t insert_slot = 0;
         cuckoo_status st = run_cuckoo(ti, i1, i2, insert_bucket, insert_slot, v1, v2);
@@ -1635,6 +1475,7 @@ private:
              * the table, so we have to try again. We signal to the
              * calling insert method to try again by returning
              * failure_under_expansion. */
+             std::cout << "Failure under expansion" << st << std::endl;
             return failure_under_expansion;
         } else if (st == ok) {
             //TODO: remove
@@ -1761,10 +1602,17 @@ private:
             ti->num_inserts[i].num.store(0);
             ti->num_deletes[i].num.store(0);
             ti->num_updates[i].num.store(0);
+            ti->num_retries[i].num.store(0);
         }
         return ok;
     }
 
+    /*void increment_retries(TableInfo *ti) {
+        //ti->num_inserts[counterid].num.fetch_add(1, std::memory_order_relaxed);
+        size_t x;
+        x = ti->num_retries[counterid].num.fetch_add(1, std::memory_order_relaxed);
+        std::cout << "Counter:" << counterid << "Number of retries?" << x << std::endl;
+    }*/
     /* cuckoo_size returns the number of elements in the given
      * table. */
     size_t cuckoo_size(const TableInfo *ti) {
@@ -1775,14 +1623,6 @@ private:
             deletes += ti->num_deletes[i].num.load();
         }
         return inserts-deletes;
-    }
-
-    size_t update_size(const TableInfo *ti) {
-        size_t updates = 0;
-        for (size_t i = 0; i < ti->num_updates.size(); i++) {
-            updates += ti->num_updates[i].num.load();
-        }
-        return updates;
     }
 
     /* cuckoo_loadfactor returns the load factor of the given table. */

@@ -126,6 +126,7 @@ void insert_thread(AllEnvironment<KType> *env) {
             KType k = env->keys[ind];
             ValType v = env->val_dist(gen);
             ValType2 v2 = env->val_dist2(gen);
+            //std::cout << "Inserting" << std::endl;
             bool res = env->table.insert(k, v);
             bool res2 = env->table2.insert(k, v2);
             EXPECT_NE(res, env->in_table[ind]);
@@ -158,6 +159,7 @@ void delete_thread(AllEnvironment<KType> *env) {
         size_t ind = env->ind_dist(gen);
         if (!env->in_use[ind].test_and_set()) {
             KType k = env->keys[ind];
+            //std::cout << "Deleting" << std::endl;
             bool res = env->table.erase(k);
             bool res2 = env->table2.erase(k);
             EXPECT_EQ(res, env->in_table[ind]);
@@ -192,7 +194,8 @@ void update_thread(AllEnvironment<KType> *env) {
             KType k = env->keys[ind];
             ValType v;
             ValType2 v2;
-            bool res, res2;
+            bool res = 0, res2 = 0;
+            //std::cout << "Deleting" << std::endl;
             switch (third(gen)) {
             case 0:
                 // update
@@ -256,6 +259,7 @@ void find_thread(AllEnvironment<KType> *env) {
             KType k = env->keys[ind];
             ValType v = 0;
             ValType2 v2 = 0;
+            //std::cout << "Finding" << std::endl;
             bool res = env->table.find(k, v);
             bool res2 = env->table2.find(k, v2);
             EXPECT_EQ(env->in_table[ind], res);

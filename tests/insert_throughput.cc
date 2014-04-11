@@ -23,10 +23,10 @@
 
 #include <libcuckoo/cuckoohash_config.h> // for SLOT_PER_BUCKET
 #include <libcuckoo/cuckoohash_map.hh>
-#include <libcuckoo/city_hasher.hh>
+//#include <libcuckoo/city_hasher.hh>
 #include "test_util.cc"
 
-typedef uint32_t KeyType;
+typedef uint64_t KeyType;
 typedef std::string KeyType2;
 typedef uint32_t ValType;
 
@@ -59,7 +59,9 @@ void insert_thread(cuckoohash_map<KType, ValType, CityHasher<KType> >& table,
             std::cerr << "Expansion triggered" << std::endl;
             exit(1);
         }
+        std::cout << "Inserting" << *begin << std::endl;
         ASSERT_TRUE(table.insert(*begin, 0));
+
     }
 }
 
@@ -84,6 +86,10 @@ public:
             const size_t swapind = gen() % i;
             keys[i] = keys[swapind];
             keys[swapind] = generateKey<KType>(i+numkeys);
+        }
+
+        for (size_t i = 0; i < numkeys; i++) {
+                std::cout << "Key#" << i << "is " << keys[i] << std::endl;
         }
 
         // We prefill the table to begin_load with thread_num threads,

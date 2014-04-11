@@ -24,7 +24,7 @@
 
 #include <libcuckoo/cuckoohash_config.h> // for SLOT_PER_BUCKET
 #include <libcuckoo/cuckoohash_map.hh>
-#include <libcuckoo/city_hasher.hh>
+//#include <libcuckoo/city_hasher.hh>
 #include "test_util.cc"
 
 typedef uint32_t KeyType;
@@ -48,14 +48,6 @@ size_t seed = 0;
 size_t test_len = 10;
 // Whether to use strings as the key
 bool use_strings = false;
-
-/* cacheint is a cache-aligned integer type. */
-struct cacheint {
-    size_t num;
-    cacheint() {
-        num = 0;
-    }
-} __attribute__((aligned(64)));
 
 template <class KType>
 struct thread_args {
@@ -151,7 +143,7 @@ public:
         ASSERT_TRUE(init_size == keys_per_thread * thread_num);
 
         //std::cout << "Table with capacity " << numkeys << " prefilled to a load factor of " << table.load_factor() << std::endl;
-        std::cout << numkeys << ", " << table.load_factor() << std::endl;
+        std::cout << numkeys << ", " << table.load_factor();
     }
 
     size_t numkeys;
@@ -190,7 +182,7 @@ void ReadThroughputTest(ReadEnvironment<KType> *env) {
     }
     size_t total_reads = 0;
     for (size_t i = 0; i < counters.size(); i++) {
-        std::cout << counters[i].num << std::endl;
+        //std::cout << counters[i].num << std::endl;
         total_reads += counters[i].num;
     }
     /*// Reports the results

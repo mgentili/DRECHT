@@ -98,6 +98,7 @@ void insert_thread(AllEnvironment<KType> *env, size_t seed) {
         // Insert a random key into the table
         KType k = generateKey<KType>(ind_dist(gen));
         ValType v = val_dist(gen);
+        std::cout << "Inserting" << std::endl;
         env->table.insert(k, v);
         env->table2.insert(k, val_dist2(gen));
     }
@@ -110,6 +111,7 @@ void delete_thread(AllEnvironment<KType> *env, size_t seed) {
     while (!env->finished.load()) {
         // Run deletes on a random key.
         const KType k = generateKey<KType>(ind_dist(gen));
+        std::cout << "Deleting" << std::endl;
         env->table.erase(k);
         env->table2.erase(k);
     }
@@ -124,6 +126,7 @@ void update_thread(AllEnvironment<KType> *env, size_t seed) {
     std::mt19937_64 gen(seed);
     auto updatefn = [](const ValType& v) -> ValType { return v+3; };
     while (!env->finished.load()) {
+        std::cout << "Updating" << std::endl;
         // Run updates, update_funcs, or upserts on a random key.
         const KType k = generateKey<KType>(ind_dist(gen));
         switch (third(gen)) {
@@ -168,6 +171,7 @@ void resize_thread(AllEnvironment<KType> *env, size_t seed) {
     if (env->finished.load()) {
         return;
     }
+    std::cout << "Resizing" << std::endl;
     const size_t hashpower = env->table2.hashpower();
     if (gen() & 1) {
         env->table.rehash(hashpower + 1);
@@ -187,6 +191,7 @@ void iterator_thread(AllEnvironment<KType> *env, size_t seed) {
     if (env->finished.load()) {
         return;
     }
+    std::cout << "Iterating" << std::endl;
     if (gen() & 1) {
         for (auto it = env->table2.begin(); !it.is_end(); it++) {
             if (gen() & 1) {
@@ -203,6 +208,7 @@ void statistics_thread(AllEnvironment<KType> *env) {
     // Runs all the statistics functions
     std::mt19937_64 gen(seed);
     while (!env->finished.load()) {
+        std::cout << "Getting statistics" << std::endl;
         env->table.size();
         env->table.empty();
         env->table.bucket_count();
@@ -221,6 +227,7 @@ void clear_thread(AllEnvironment<KType> *env, size_t seed) {
     if (env->finished.load()) {
         return;
     }
+    std::cout << "Clearing" << std::endl;
     env->table.clear();
 }
 
