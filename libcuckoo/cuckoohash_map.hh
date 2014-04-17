@@ -455,6 +455,16 @@ public:
     }
 
 private:
+
+    /* cacheint is a cache-aligned atomic integer type. */
+    struct cacheint {
+        std::atomic<size_t> num;
+        cacheint() {}
+        cacheint(cacheint&& x) {
+            num.store(x.num.load());
+        }
+    } __attribute__((aligned(64)));
+
     /* The Bucket type holds SLOT_PER_BUCKET keys and values, and a
      * occupied bitset, which indicates whether the slot at the given
      * bit index is in the table or not. It allows constructing and
@@ -462,6 +472,7 @@ private:
      * deallocating the memory. */
     typedef char partial_t;
     struct Bucket {
+        cacheint version;
         std::bitset<SLOT_PER_BUCKET> occupied;
         partial_t partials[SLOT_PER_BUCKET];
         key_type keys[SLOT_PER_BUCKET];
@@ -487,17 +498,9 @@ private:
                     eraseKV(i);
                 }
             }
+            version.num.store(0);
         }
     };
-
-    /* cacheint is a cache-aligned atomic integer type. */
-    struct cacheint {
-        std::atomic<size_t> num;
-        cacheint() {}
-        cacheint(cacheint&& x) {
-            num.store(x.num.load());
-        }
-    } __attribute__((aligned(64)));
 
     /* TableInfo contains the entire state of the hashtable. We
      * allocate one TableInfo pointer per hash table and store all of
@@ -509,9 +512,6 @@ private:
 
         // unique pointer to the array of buckets
         Bucket* buckets_;
-
-        // unique pointer to the array of versions
-        cacheint* versions_;
 
         // per-core counters for the number of inserts and deletes
         std::vector<cacheint> num_inserts;
@@ -528,14 +528,12 @@ private:
          * num_deletes. */
         TableInfo(const size_t hashtable_init) {
             buckets_ = nullptr;
-            versions_ = nullptr;
             try {
                 hashpower_ = hashtable_init;
                 buckets_ = bucket_allocator.allocate(hashsize(hashpower_));
                 for (size_t i = 0; i < hashsize(hashpower_); i++) {
                     bucket_allocator.construct(buckets_+i);
                 }
-                versions_ = new cacheint[kNumVersions];
                 num_inserts.resize(kNumCores);
                 num_deletes.resize(kNumCores);
                 num_updates.resize(kNumCores);
@@ -544,9 +542,6 @@ private:
             } catch (const std::bad_alloc&) {
                 if (buckets_ != nullptr) {
                     bucket_allocator.deallocate(buckets_, hashsize(hashpower_));
-                }
-                if (versions_ != nullptr) {
-                    delete[] versions_;
                 }
                 throw;
             }
@@ -557,7 +552,6 @@ private:
                 buckets_[i].clear();
             }
             bucket_allocator.deallocate(buckets_, hashsize(hashpower_));
-            delete[] versions_;
         }
 
     };
@@ -575,20 +569,20 @@ private:
 
     /* get_version gets the version for a given bucket index */
     static inline void get_version(const TableInfo *ti, const size_t i, size_t& v) {
-        v = ti->versions_[version_ind(i)].num.load();
+        v = ti->buckets_[i].version.num.load();
     }
 
     static inline void get_version_two(const TableInfo *ti, const size_t i1, const size_t i2, 
                                        size_t& v1, size_t& v2) {
-        v1 = ti->versions_[version_ind(i1)].num.load();
-        v2 = ti->versions_[version_ind(i2)].num.load();
+        v1 = ti->buckets_[i1].version.num.load();
+        v2 = ti->buckets_[i2].version.num.load();
     }
 
     static inline void get_version_three(const TableInfo *ti, const size_t i1, const size_t i2,
                                          const size_t i3, size_t& v1, size_t& v2, size_t& v3) {
-        v1 = ti->versions_[version_ind(i1)].num.load();
-        v2 = ti->versions_[version_ind(i2)].num.load();
-        v3 = ti->versions_[version_ind(i3)].num.load();
+        v1 = ti->buckets_[i1].version.num.load();
+        v2 = ti->buckets_[i2].version.num.load();
+        v3 = ti->buckets_[i3].version.num.load();
     }
 
     /* check_version makes sure that the final version is the same as the initial version, and 
@@ -603,7 +597,7 @@ private:
         return check_version(v1_i,v1_f) && check_version(v2_i, v2_f);
     }
 
-    //TODO: Understand memory orders? stop applying version_ind() twice.
+    //TODO: Understand memory orders?
     /* start_inc_version increments the version number from 0 mod 2 to 1 mod 2 (effectively
      * locking a writer lock)
      */
@@ -619,7 +613,7 @@ private:
                 continue;
             }
 
-            if(ti->versions_[version_ind(i)].num.compare_exchange_weak(v, (size_t) v+1, 
+            if(ti->buckets_[i].version.num.compare_exchange_weak(v, (size_t) v+1, 
                                                                                    std::memory_order_release,
                                                                                    std::memory_order_relaxed)) {
                 //std::cout << "Incremented version properly " << v << std::endl;
@@ -633,13 +627,11 @@ private:
      */
     static inline void end_inc_version(const TableInfo *ti, const size_t i, size_t& v) {
         //nobody should have been able to touch this version
-        ti->versions_[version_ind(i)].num.fetch_add(1, std::memory_order_relaxed);
+        ti->buckets_[i].version.num.fetch_add(1, std::memory_order_relaxed);
     }
 
     static inline void end_inc_version_two(const TableInfo *ti, size_t i1, size_t i2,
                                            size_t& v1, size_t& v2) {
-        i1 = version_ind(i1);
-        i2 = version_ind(i2);
         end_inc_version(ti, i1, v1);
         if (i1 != i2) {
             end_inc_version(ti, i2, v2);
@@ -648,8 +640,6 @@ private:
 
     static inline void start_inc_version_two(const TableInfo *ti, size_t i1, size_t i2, 
                                        size_t& v1, size_t& v2) {
-        i1 = version_ind(i1);
-        i2 = version_ind(i2);
         if (i1 < i2) {
             start_inc_version(ti, i1, v1);
             start_inc_version(ti, i2, v2);
@@ -663,9 +653,6 @@ private:
 
     static inline void start_inc_version_three(const TableInfo *ti, size_t i1,
                                   size_t i2, size_t i3, size_t& v1, size_t& v2, size_t& v3) {
-        i1 = version_ind(i1);
-        i2 = version_ind(i2);
-        i3 = version_ind(i3);
         // If any are the same, we just run lock_two
         if (i1 == i2) {
             start_inc_version_two(ti, i1, i3, v1, v3);
@@ -709,9 +696,6 @@ private:
     /* unlock_three unlocks the three given buckets */
     static inline void end_inc_version_three(const TableInfo *ti, size_t i1,
                                     size_t i2, size_t i3, size_t& v1, size_t& v2, size_t& v3) {
-        i1 = version_ind(i1);
-        i2 = version_ind(i2);
-        i3 = version_ind(i3);
         end_inc_version(ti, i1, v1);
         if (i2 != i1) {
             end_inc_version(ti, i2, v2);
@@ -769,7 +753,7 @@ private:
         TableInfo *ti = table_info.load();
         *hazard_pointer = static_cast<void*>(ti);
         size_t dummy;
-        for (size_t i = 0; i < kNumVersions; i++) {
+        for (size_t i = 0; i < hashsize(ti->hashpower_); i++) {
             start_inc_version(ti, i, dummy);
         }
         return ti;
@@ -779,7 +763,7 @@ private:
      * effectively releases all the "locks" on the buckets */
     inline void end_inc_version_all(TableInfo *ti) {
         size_t dummy;
-        for (size_t i = 0; i < kNumVersions; i++) {
+        for (size_t i = 0; i < hashsize(ti->hashpower_); i++) {
             end_inc_version(ti, i, dummy);
         }
     }
@@ -821,10 +805,6 @@ private:
     // size of a bucket in bytes
     static const size_t kBucketSize = sizeof(Bucket);
 
-    // number of version counters in the versions_ array
-    // TODO: Make dynamic?
-    static const size_t kNumVersions = 1 << 12;
-
     // number of cores on the machine
     static const size_t kNumCores;
 
@@ -834,12 +814,6 @@ private:
 
     // The maximum depth of a BFS path
     static const size_t MAX_BFS_DEPTH = 4;
-
-    /* version_ind converts an index into buckets_ to an index into
-     * versions_. */
-    static inline size_t version_ind(const size_t bucket_ind) {
-        return bucket_ind & (kNumVersions - 1);
-    }
 
     /* hashsize returns the number of buckets corresponding to a given
      * hashpower. */
@@ -1149,7 +1123,7 @@ private:
                 // Don't unlock fb or ob, since they are needed in
                 // cuckoo_insert. Only unlock tb if it doesn't unlock
                 // the same bucket as fb or ob.
-                if (version_ind(tb) != version_ind(fb) && version_ind(tb) != version_ind(ob)) {
+                if (tb != fb && tb != ob) {
                     end_inc_version(ti, tb, v1);
                 }
             } else {
@@ -1207,8 +1181,8 @@ private:
                 insert_bucket = cuckoo_path[0].bucket;
                 insert_slot = cuckoo_path[0].slot;
                 assert(insert_bucket == i1 || insert_bucket == i2);
-                assert(ti->versions_[version_ind(i1)].num.load() % 2 == 1);
-                assert(ti->versions_[version_ind(i2)].num.load() % 2 == 1);
+                assert(ti->buckets_[i1].version.num.load() % 2 == 1);
+                assert(ti->buckets_[i2].version.num.load() % 2 == 1);
                 assert(!ti->buckets_[insert_bucket].occupied[insert_slot]);
                 done = true;
                 break;
@@ -1451,8 +1425,8 @@ private:
             return failure_under_expansion;
         } else if (st == ok) {
             //TODO: remove
-            assert(ti->versions_[version_ind(i1)].num.load() % 2 == 1);
-            assert(ti->versions_[version_ind(i2)].num.load() % 2 == 1);
+            assert(ti->buckets_[i1].version.num.load() % 2 == 1);
+            assert(ti->buckets_[i2].version.num.load() % 2 == 1);
             assert(!ti->buckets_[insert_bucket].occupied[insert_slot]);
             assert(insert_bucket == index_hash(ti, hv) || insert_bucket == alt_index(ti, hv, index_hash(ti, hv)));
             /* Since we unlocked the buckets during run_cuckoo,
