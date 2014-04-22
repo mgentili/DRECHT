@@ -38,6 +38,7 @@ class cuckoohash_map {
         failure_function_not_supported = 5,
         failure_table_full = 6,
         failure_under_expansion = 7,
+        failure_key_moved = 8
     } cuckoo_status;
 
     /* This is a hazard pointer, used to indicate which version of the
@@ -268,21 +269,24 @@ public:
      * the associated value it finds in \p val. */
     bool find(const key_type& key, mapped_type& val) {
         check_hazard_pointer();
-        check_counterid(); //TODO: Remove when not counting reads
+        //check_counterid(); //TODO: Remove when not counting reads
         size_t hv = hashed_key(key);
-        TableInfo *ti;
-        size_t i1, i2, v1_i, v2_i, v1_f, v2_f;
-        cuckoo_status st;
-        do {
-            snapshot_and_get_version_two(hv, ti, i1, i2, v1_i, v2_i);
-            st = cuckoo_find(key, val, hv, ti, i1, i2);
-            get_version_two(ti, i1, i2, v1_f, v2_f);
-            //ti->num_retries[counterid].num.fetch_add(1, std::memory_order_relaxed);
-        } while(!check_version_two(v1_i, v2_i, v1_f, v2_f));
         
-        unset_hazard_pointer();
+        TableInfo *ti;
+        cuckoo_status res;
 
-        return (st == ok);
+        snapshot_old(ti);
+        res = find_one(ti, hv, key, val);
+        unset_hazard_pointer(); //only need to keep track of ptr to old table b/c new never will be deleted until in old pos
+
+        // couldn't find key in bucket, and one of the buckets was moved to new table
+        if (res == failure_key_moved) {
+            snapshot_new(ti);
+            res = find_one(ti, hv, key, val);
+            return (res == ok);
+        }
+        
+        return (res == ok);
     }
 
     /*! This version of find does the same thing as the two-argument
@@ -309,12 +313,40 @@ public:
         check_hazard_pointer();
         check_counterid();
         size_t hv = hashed_key(key);
-        //std::cout << "Inserting hashed value" << hv << std::endl;
-        TableInfo *ti;
+        TableInfo *ti_old, *ti_new;
         size_t i1, i2;
-        snapshot_and_lock_write_two(hv, ti, i1, i2);
-        return cuckoo_insert_loop(key, val, hv, ti, i1, i2);
+        cuckoo_status res;
+
+        snapshot_old(ti_old);
+        res = insert_one(ti_old, hv, key, val, i1, i2);
+        if (res == failure_key_duplicated) { //found in old table
+            //std::cout << "Key duplicated" << std::endl;
+            //TODO: unlock if not already done
+            //unlock_write_two(ti_old, i1, i2);
+            unset_hazard_pointer();
+            return false;
+        }
+        // One of the buckets was moved to new table
+        if (res == failure_key_moved) {
+            snapshot_new(ti_new);
+            res = insert_one(ti_new, hv, key, val, i1, i2);
+            if (!ti_old->buckets_[i1].hasmigrated) {
+                migrate_bucket(ti_old, ti_new, i1);
+            }
+            if (!ti_old->buckets_[i2].hasmigrated) {
+                migrate_bucket(ti_old, ti_new, i2);
+            }
+            unset_hazard_pointer();
+            if (res == failure_key_duplicated) {
+                return false;
+            }
+            //TODO: unlock if not already done
+            return true;
+        }
+        assert(res == ok);
+        return true;
     }
+    
 #if 1
     /*! erase removes \p key and it's associated value from the table,
      * calling their destructors. If \p key is not there, it returns
@@ -476,6 +508,7 @@ private:
         key_type keys[SLOT_PER_BUCKET];
         mapped_type vals[SLOT_PER_BUCKET];
         bool hasmoved;
+        bool hasmigrated;
 
         void setKV(size_t pos, const key_type& k, const mapped_type& v) {
             occupied.set(pos);
@@ -554,6 +587,7 @@ private:
 
     };
     std::atomic<TableInfo*> table_info;
+    std::atomic<TableInfo*> new_table_info;
 
     /* old_table_infos holds pointers to old TableInfos that were
      * replaced during expansion. This keeps the memory alive for any
@@ -564,6 +598,67 @@ private:
     static hasher hashfn;
     static key_equal eqfn;
     static std::allocator<Bucket> bucket_allocator;
+
+
+    // find_one searchers a specific table instance for the value corresponding to a given hash value
+    cuckoo_status find_one(const TableInfo *ti, size_t hv, const key_type& key, mapped_type& val) {
+        size_t i1, i2, v1_i, v2_i, v1_f, v2_f;
+        cuckoo_status st;
+        i1 = index_hash(ti, hv);
+        i2 = alt_index(ti, hv, i1);
+        do {
+            get_version_two(ti, i1, i2, v1_i, v2_i);
+            st = cuckoo_find(key, val, hv, ti, i1, i2);
+            get_version_two(ti, i1, i2, v1_f, v2_f);
+            //ti->num_retries[counterid].num.fetch_add(1, std::memory_order_relaxed);
+        } while(!check_version_two(v1_i, v2_i, v1_f, v2_f));
+
+        return st;
+    }
+
+    // insert_one tries to insert a key-value pair into a specific table instance
+    // it will return a failure only if the key is already in the table
+    cuckoo_status insert_one(TableInfo *ti, size_t hv, const key_type& key,
+                            const mapped_type& val, size_t& i1, size_t& i2) {
+        i1 = index_hash(ti, hv);
+        i2 = alt_index(ti, hv, i1);
+        lock_write_two(ti, i1, i2);
+        //TODO: Don't unlock 
+        bool res = cuckoo_insert_loop(key, val, hv, ti, i1, i2);
+        if (res) {
+            return ok;
+        }
+
+        return failure_key_duplicated;
+        //return cuckoo_insert(key, val, hv, ti, i1, i2);
+    }
+
+    // assumes bucket in old table is locked the whole time
+    // tries to migrate bucket
+    void migrate_bucket(TableInfo* ti_old, TableInfo* ti_new, size_t old_bucket) {
+        size_t i1, i2, hv;
+        key_type key;
+        mapped_type val;
+        cuckoo_status res;
+        (void) res;
+        assert(!ti_old->buckets_[old_bucket].hasmigrated);
+        for (size_t i = 0; i < SLOT_PER_BUCKET; i++) {
+            if (!ti_old->buckets_[old_bucket].occupied[i]) {
+                continue;
+            }
+            key = ti_old->buckets_[old_bucket].keys[i];
+            val = ti_old->buckets_[old_bucket].vals[i];
+            hv = hashed_key(key);
+            i1 = index_hash(ti_new, hv);
+            i2 = alt_index(ti_new, hv, i1);
+            lock_write_two(ti_new, i1, i2);
+            res = cuckoo_insert(key, val, hv, ti_new, i1, i2);
+            assert(res == ok); // cannot have inserted into new table before
+            unlock_write_two(ti_new, i1, i2);
+        }
+        ti_old->buckets_[old_bucket].clear();
+        ti_old->buckets_[old_bucket].hasmoved = true;
+    }
 
     /* get_version gets the version for a given bucket index */
     static inline void get_version(const TableInfo *ti, const size_t i, size_t& v) {
@@ -590,7 +685,7 @@ private:
         return check_version(v1_i,v1_f) && check_version(v2_i, v2_f);
     }
 
-    /* locks locks a bucket based on lock_level privileges
+    /* lock locks a bucket based on lock_level privileges
      */
     static inline void lock(const TableInfo *ti, const size_t i, size_t lock_level) {
         size_t v;
@@ -609,7 +704,7 @@ private:
     }
 
     static inline void unlock(const TableInfo *ti, const size_t i, const size_t lock_level) {
-        ti->buckets_[i].version.num.fetch_add((1 << 2) - lock_level);
+        ti->buckets_[i].version.num += (1<<2) - lock_level;
     }
 
     /* lock_paths locks out concurrent writers, but allows concurrent readers
@@ -736,6 +831,24 @@ private:
         }
         if (i3 != i1 && i3 != i2) {
             unlock_write(ti, i3);
+        }
+    }
+
+    void snapshot_old(TableInfo*& ti) {
+    TryAcquire:
+        ti = table_info.load();
+        *hazard_pointer = static_cast<void*>(ti); //to keep track of which tables are currently in use
+        if (ti != table_info.load()) {
+            goto TryAcquire;
+        }
+    }
+
+    void snapshot_new(TableInfo*& ti) {
+    TryAcquire:
+        ti = new_table_info.load();
+        *hazard_pointer = static_cast<void*>(ti); //to keep track of which tables are currently in use
+        if (ti != new_table_info.load()) {
+            goto TryAcquire;
         }
     }
 
