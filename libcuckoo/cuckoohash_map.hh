@@ -470,11 +470,9 @@ private:
      * bit index is in the table or not. It allows constructing and
      * destroying key-value pairs separate from allocating and
      * deallocating the memory. */
-    typedef char partial_t;
     struct Bucket {
         cacheint version;
         std::bitset<SLOT_PER_BUCKET> occupied;
-        partial_t partials[SLOT_PER_BUCKET];
         key_type keys[SLOT_PER_BUCKET];
         mapped_type vals[SLOT_PER_BUCKET];
         bool hasmoved;
@@ -846,9 +844,6 @@ private:
     static const size_t W = 1;
     static const size_t P = 1 << 1;
 
-    // true if the key is small and simple, which means using partial
-    // keys would probably slow us down
-    static const bool is_simple = std::is_pod<key_type>::value && sizeof(key_type) <= 8;
 
     // key size in bytes
     static const size_t kKeySize = sizeof(key_type);
@@ -905,19 +900,6 @@ private:
         const size_t tag = (hv >> ti->hashpower_) + 1;
         /* 0x5bd1e995 is the hash constant from MurmurHash2 */
         return (index ^ (tag * 0x5bd1e995)) & hashmask(ti->hashpower_);
-    }
-
-    /* partial_key returns a partial_t representing the upper
-     * sizeof(partial_t) bytes of the hashed key. This is used for
-     * partial-key cuckoohashing. If the key type is POD and small, we
-     * don't use partial keys, so we just return 0. */
-    template <class Bogus = void*>
-    static inline typename std::enable_if<sizeof(Bogus) && !is_simple, partial_t>::type partial_key(const size_t hv) {
-        return (partial_t)(hv >> ((sizeof(size_t)-sizeof(partial_t)) * 8));
-    }
-    template <class Bogus = void*>
-    static inline typename std::enable_if<sizeof(Bogus) && is_simple, partial_t>::type partial_key(const size_t&) {
-        return 0;
     }
 
     /* CuckooRecord holds one position in a cuckoo path. */
@@ -1166,9 +1148,6 @@ private:
                 return false;
             }
 
-            if (!is_simple) {
-                ti->buckets_[tb].partials[ts] = ti->buckets_[fb].partials[fs];
-            }
             ti->buckets_[tb].setKV(ts, ti->buckets_[fb].keys[fs], ti->buckets_[fb].vals[fs]);
             ti->buckets_[fb].eraseKV(fs);
             if (depth == 1) {
@@ -1256,16 +1235,14 @@ private:
 
     /* try_read_from-bucket will search the bucket for the given key
      * and store the associated value if it finds it. */
-    static bool try_read_from_bucket(const TableInfo *ti, const partial_t partial,
+    static bool try_read_from_bucket(const TableInfo *ti, 
                                      const key_type &key, mapped_type &val,
                                      const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
             if (!ti->buckets_[i].occupied[j]) {
                 continue;
             }
-            if (!is_simple && partial != ti->buckets_[i].partials[j]) {
-                continue;
-            }
+
             if (eqfn(key, ti->buckets_[i].keys[j])) {
                 val = ti->buckets_[i].vals[j];
                 return true;
@@ -1276,13 +1253,11 @@ private:
 
     /* add_to_bucket will insert the given key-value pair into the
      * slot. */
-    static inline void add_to_bucket(TableInfo *ti, const partial_t partial,
+    static inline void add_to_bucket(TableInfo *ti, 
                                      const key_type &key, const mapped_type &val,
                                      const size_t i, const size_t j) {
         assert(!ti->buckets_[i].occupied[j]);
-        if (!is_simple) {
-            ti->buckets_[i].partials[j] = partial;
-        }
+        
         ti->buckets_[i].setKV(j, key, val);
         ti->num_inserts[counterid].num.fetch_add(1, std::memory_order_relaxed);
     }
@@ -1292,7 +1267,7 @@ private:
      * it will search the entire bucket and return false if it finds
      * the key already in the table (duplicate key error) and true
      * otherwise. */
-    static bool try_add_to_bucket(TableInfo *ti, const partial_t partial,
+    static bool try_add_to_bucket(TableInfo *ti, 
                                   const key_type &key, const mapped_type &val,
                                   const size_t i, int& j) {
         j = -1;
@@ -1300,9 +1275,6 @@ private:
 
         for (size_t k = 0; k < SLOT_PER_BUCKET; k++) {
             if (ti->buckets_[i].occupied[k]) {
-                if (!is_simple && partial != ti->buckets_[i].partials[k]) {
-                    continue;
-                }
                 if (eqfn(key, ti->buckets_[i].keys[k])) {
                     return false;
                 }
@@ -1322,13 +1294,10 @@ private:
 
     /* try_del_from_bucket will search the bucket for the given key,
      * and set the slot of the key to empty if it finds it. */
-    static bool try_del_from_bucket(TableInfo *ti, const partial_t partial,
+    static bool try_del_from_bucket(TableInfo *ti, 
                                     const key_type &key, const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
             if (!ti->buckets_[i].occupied[j]) {
-                continue;
-            }
-            if (!is_simple && ti->buckets_[i].partials[j] != partial) {
                 continue;
             }
             if (eqfn(ti->buckets_[i].keys[j], key)) {
@@ -1342,14 +1311,11 @@ private:
 
     /* try_update_bucket will search the bucket for the given key and
      * change its associated value if it finds it. */
-    static bool try_update_bucket(TableInfo *ti, const partial_t partial,
+    static bool try_update_bucket(TableInfo *ti, 
                                   const key_type &key, const mapped_type &value,
                                   const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
             if (!ti->buckets_[i].occupied[j]) {
-                continue;
-            }
-            if (!is_simple && ti->buckets_[i].partials[j] != partial) {
                 continue;
             }
             if (eqfn(ti->buckets_[i].keys[j], key)) {
@@ -1363,14 +1329,11 @@ private:
     /* try_update_bucket_fn will search the bucket for the given key
      * and change its associated value with the given function if it
      * finds it. */
-    static bool try_update_bucket_fn(TableInfo *ti, const partial_t partial,
+    static bool try_update_bucket_fn(TableInfo *ti, 
                                      const key_type &key, const updater& fn,
                                      const size_t i) {
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
             if (!ti->buckets_[i].occupied[j]) {
-                continue;
-            }
-            if (!is_simple && ti->buckets_[i].partials[j] != partial) {
                 continue;
             }
             if (eqfn(ti->buckets_[i].keys[j], key)) {
@@ -1387,11 +1350,10 @@ private:
     static cuckoo_status cuckoo_find(const key_type& key, mapped_type& val,
                                      const size_t hv, const TableInfo *ti,
                                      const size_t i1, const size_t i2) {
-        const partial_t partial = partial_key(hv);
-        if (try_read_from_bucket(ti, partial, key, val, i1)) {
+        if (try_read_from_bucket(ti, key, val, i1)) {
             return ok;
         }
-        if (try_read_from_bucket(ti, partial, key, val, i2)) {
+        if (try_read_from_bucket(ti, key, val, i2)) {
             return ok;
         }
         return failure_key_not_found;
@@ -1409,11 +1371,10 @@ private:
                                 const size_t i1, const size_t i2) {
         mapped_type oldval;
         int res1, res2;
-        const partial_t partial = partial_key(hv);
 
         //shortcut if nothing has been moved to an alternative bucket yet 
         if (!ti->buckets_[i1].hasmoved) {
-            if(!try_add_to_bucket(ti, partial, key, val, i1, res1)) {
+            if(!try_add_to_bucket(ti, key, val, i1, res1)) {
                 unlock_write_two(ti, i1, i2);
                 //std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
                 return failure_key_duplicated;
@@ -1421,43 +1382,43 @@ private:
 
             if(res1 != -1) {
                 //std::cout << "Successful shortcut" << std::endl;
-                add_to_bucket(ti, partial, key, val, i1, res1);
+                add_to_bucket(ti, key, val, i1, res1);
                 unlock_write_two(ti, i1, i2);
                 return ok;
             }
 
-            if (!try_add_to_bucket(ti, partial, key, val, i2, res2)) {
+            if (!try_add_to_bucket(ti, key, val, i2, res2)) {
                 unlock_write_two(ti, i1, i2);
                 //std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
                 return failure_key_duplicated;
             }
 
             if (res2 != -1) {
-                add_to_bucket(ti, partial, key, val, i2, res2);
+                add_to_bucket(ti, key, val, i2, res2);
                 unlock_write_two(ti, i1, i2);
                 return ok;
             }
         } else {
             //std::cout << "Bucket had a moved thing" << std::endl;
-            if (!try_add_to_bucket(ti, partial, key, val, i1, res1)) {
+            if (!try_add_to_bucket(ti, key, val, i1, res1)) {
                 unlock_write_two(ti, i1, i2);
                 //std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
                 return failure_key_duplicated;
             }
 
-            if (!try_add_to_bucket(ti, partial, key, val, i2, res2)) {
+            if (!try_add_to_bucket(ti, key, val, i2, res2)) {
                 unlock_write_two(ti, i1, i2);
                 //std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
                 return failure_key_duplicated;
             }
             if (res1 != -1) {
-                add_to_bucket(ti, partial, key, val, i1, res1);
+                add_to_bucket(ti, key, val, i1, res1);
                 unlock_write_two(ti, i1, i2);
                 return ok;
             }
             //std::cout << "Have to check second bucket" << std::endl;
             if (res2 != -1) {
-                add_to_bucket(ti, partial, key, val, i2, res2);
+                add_to_bucket(ti, key, val, i2, res2);
                 unlock_write_two(ti, i1, i2);
                 return ok;
             }
@@ -1489,7 +1450,7 @@ private:
                 unlock_write_two(ti, i1, i2);
                 return failure_key_duplicated;
             }
-            add_to_bucket(ti, partial, key, val, insert_bucket, insert_slot);
+            add_to_bucket(ti, key, val, insert_bucket, insert_slot);
             unlock_write_two(ti, i1, i2);
             return ok;
         }
@@ -1537,11 +1498,10 @@ private:
     cuckoo_status cuckoo_delete(const key_type &key, const size_t hv,
                                 TableInfo *ti, const size_t i1,
                                 const size_t i2) {
-        const partial_t partial = partial_key(hv);
-        if (try_del_from_bucket(ti, partial, key, i1)) {
+        if (try_del_from_bucket(ti, key, i1)) {
             return ok;
         }
-        if (try_del_from_bucket(ti, partial, key, i2)) {
+        if (try_del_from_bucket(ti, key, i2)) {
             return ok;
         }
         return failure_key_not_found;
@@ -1553,11 +1513,10 @@ private:
     cuckoo_status cuckoo_update(const key_type &key, const mapped_type &val,
                                 const size_t hv, TableInfo *ti,
                                 const size_t i1, const size_t i2) {
-        const partial_t partial = partial_key(hv);
-        if (try_update_bucket(ti, partial, key, val, i1)) {
+        if (try_update_bucket(ti, key, val, i1)) {
             return ok;
         }
-        if (try_update_bucket(ti, partial, key, val, i2)) {
+        if (try_update_bucket(ti, key, val, i2)) {
             return ok;
         }
         return failure_key_not_found;
@@ -1570,11 +1529,10 @@ private:
     cuckoo_status cuckoo_update_fn(const key_type &key, const updater& fn,
                                      const size_t hv, TableInfo *ti,
                                      const size_t i1, const size_t i2) {
-        const partial_t partial = partial_key(hv);
-        if (try_update_bucket_fn(ti, partial, key, fn, i1)) {
+        if (try_update_bucket_fn(ti, key, fn, i1)) {
             return ok;
         }
-        if (try_update_bucket_fn(ti, partial, key, fn, i2)) {
+        if (try_update_bucket_fn(ti, key, fn, i2)) {
             return ok;
         }
         return failure_key_not_found;
