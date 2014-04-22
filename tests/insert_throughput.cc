@@ -59,7 +59,7 @@ void insert_thread(cuckoohash_map<KType, ValType, CityHasher<KType> >& table,
             std::cerr << "Expansion triggered" << std::endl;
             exit(1);
         }
-        std::cout << "Inserting" << *begin << std::endl;
+        //std::cout << "Inserting" << *begin << std::endl;
         ASSERT_TRUE(table.insert(*begin, 0));
 
     }
@@ -88,9 +88,9 @@ public:
             keys[swapind] = generateKey<KType>(i+numkeys);
         }
 
-        for (size_t i = 0; i < numkeys; i++) {
+        /*for (size_t i = 0; i < numkeys; i++) {
                 std::cout << "Key#" << i << "is " << keys[i] << std::endl;
-        }
+        }*/
 
         // We prefill the table to begin_load with thread_num threads,
         // giving each thread enough keys to insert
