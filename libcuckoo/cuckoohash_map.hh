@@ -158,9 +158,6 @@ public:
     typedef Hash              hasher;
     //! key_equal is the type of the equality predicate.
     typedef Pred              key_equal;
-    //! updater is the function type for functions passed to update_fn
-    //! and upsert.
-    typedef std::function<mapped_type(const mapped_type&)> updater;
 
     /*! The constructor creates a new hash table with enough space for
      * \p n elements. If the constructor fails, it will throw an
@@ -205,18 +202,6 @@ public:
         const size_t s = cuckoo_size(ti);
         unset_hazard_pointer();
         return s;
-    }
-
-    //number of upserts that led to updates rather than inserts
-    size_t number_updates() {
-        check_hazard_pointer();
-        const TableInfo *ti = snapshot_table_nolock();
-        size_t updates = 0;
-        for (size_t i = 0; i < ti->num_updates.size(); i++) {
-            updates += ti->num_updates[i].num.load();
-        }
-        unset_hazard_pointer();
-        return updates;
     }
 
     size_t number_retries() {
@@ -348,7 +333,6 @@ public:
         return (res == ok);
     }
     
-#if 1
     /*! erase removes \p key and it's associated value from the table,
      * calling their destructors. If \p key is not there, it returns
      * false. */
@@ -380,74 +364,6 @@ public:
         return (res == ok);
     }
 
-
-    /*! update changes the value associated with \p key to \p val. If
-     * \p key is not there, it returns false. */
-    bool update(const key_type& key, const mapped_type& val) {
-        check_hazard_pointer();
-        size_t hv = hashed_key(key);
-        TableInfo *ti;
-        size_t i1, i2;
-        snapshot_and_lock_write_two(hv, ti, i1, i2);
-        const cuckoo_status st = cuckoo_update(key, val, hv, ti, i1, i2);
-        unlock_write_two(ti, i1, i2);
-        unset_hazard_pointer();
-
-        return (st == ok);
-    }
-
-    /*! update_fn changes the value associated with \p key with the
-     *  function \p fn. \p fn should be a function that accepts an
-     *  argument of type \p mapped_type and returns a new value of
-     *  type \p mapped_type. The exact type of \p fn is specified by
-     *  the \ref updater typedef. */
-    bool update_fn(const key_type& key, const updater& fn) {
-        check_hazard_pointer();
-        size_t hv = hashed_key(key);
-        TableInfo *ti;
-        size_t i1, i2;
-        snapshot_and_lock_write_two(hv, ti, i1, i2);
-        const cuckoo_status st = cuckoo_update_fn(key, fn, hv, ti, i1, i2);
-        unlock_write_two(ti, i1, i2);
-        unset_hazard_pointer();
-
-        return (st == ok);
-    }
-
-    /*! upsert is a combined update_fn-insert function. It first tries
-     *  updating the value associated with \p key using \p fn. If \p
-     *  key is not in the table, then it runs an insert with \p key
-     *  and \p val. */
-    bool upsert(const key_type& key, const updater& fn, const mapped_type& val) {
-        check_hazard_pointer();
-        check_counterid();
-        size_t hv = hashed_key(key);
-        TableInfo *ti;
-        size_t i1, i2;
-
-        bool res;
-        do {
-        snapshot_and_lock_write_two(hv, ti, i1, i2);
-
-        const cuckoo_status st = cuckoo_update_fn(key, fn, hv, ti, i1, i2);
-        if (st == ok) {
-            ti->num_updates[counterid].num.fetch_add(1, std::memory_order_relaxed);
-            unlock_write_two(ti, i1, i2);
-            unset_hazard_pointer();
-            return true;
-        }
-
-        // We run an insert, since the update failed
-        res = cuckoo_insert_loop(key, val, hv, ti, i1, i2);
-
-        // The only valid reason for res being false is if insert
-        // encountered a duplicate key after releasing the locks and
-        // performing cuckoo hashing. In this case, we retry the
-        // entire upsert operation.
-        } while (!res);
-        return true;
-    }
-#endif
     /*! rehash will size the table using a hashpower of \p n. Note
      * that the number of buckets in the table will be 2<SUP>\p
      * n</SUP> after expansion, so the table will have 2<SUP>\p
@@ -560,7 +476,6 @@ private:
         // per-core counters for the number of inserts and deletes
         std::vector<cacheint> num_inserts;
         std::vector<cacheint> num_deletes;
-        std::vector<cacheint> num_updates;
 
         // counter for the number of find retries
         std::vector<cacheint> num_retries;
@@ -580,7 +495,6 @@ private:
                 }
                 num_inserts.resize(kNumCores);
                 num_deletes.resize(kNumCores);
-                num_updates.resize(kNumCores);
                 num_retries.resize(kNumCores);
 
             } catch (const std::bad_alloc&) {
@@ -1468,41 +1382,6 @@ private:
         return failure_key_not_found;
     }
 
-    /* try_update_bucket will search the bucket for the given key and
-     * change its associated value if it finds it. */
-    static bool try_update_bucket(TableInfo *ti, 
-                                  const key_type &key, const mapped_type &value,
-                                  const size_t i) {
-        for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-            if (!ti->buckets_[i].occupied[j]) {
-                continue;
-            }
-            if (eqfn(ti->buckets_[i].keys[j], key)) {
-                ti->buckets_[i].vals[j] = value;
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /* try_update_bucket_fn will search the bucket for the given key
-     * and change its associated value with the given function if it
-     * finds it. */
-    static bool try_update_bucket_fn(TableInfo *ti, 
-                                     const key_type &key, const updater& fn,
-                                     const size_t i) {
-        for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
-            if (!ti->buckets_[i].occupied[j]) {
-                continue;
-            }
-            if (eqfn(ti->buckets_[i].keys[j], key)) {
-                ti->buckets_[i].vals[j] = fn(ti->buckets_[i].vals[j]);
-                return true;
-            }
-        }
-        return false;
-    }
-
     /* cuckoo_find searches the table for the given key and value,
      * storing the value in the val if it finds the key. It expects
      * the locks to be taken and released outside the function. */
@@ -1663,37 +1542,6 @@ private:
         return failure_key_not_found;
     }
 
-    /* cuckoo_update searches the table for the given key and updates
-     * its value if it finds it. It expects the locks to be taken and
-     * released outside the function. */
-    cuckoo_status cuckoo_update(const key_type &key, const mapped_type &val,
-                                const size_t hv, TableInfo *ti,
-                                const size_t i1, const size_t i2) {
-        if (try_update_bucket(ti, key, val, i1)) {
-            return ok;
-        }
-        if (try_update_bucket(ti, key, val, i2)) {
-            return ok;
-        }
-        return failure_key_not_found;
-    }
-
-    /* cuckoo_update_fn searches the table for the given key and
-     * runs the given function on its value if it finds it, assigning
-     * the result of the function to the value. It expects the locks
-     * to be taken and released outside the function. */
-    cuckoo_status cuckoo_update_fn(const key_type &key, const updater& fn,
-                                     const size_t hv, TableInfo *ti,
-                                     const size_t i1, const size_t i2) {
-        if (try_update_bucket_fn(ti, key, fn, i1)) {
-            return ok;
-        }
-        if (try_update_bucket_fn(ti, key, fn, i2)) {
-            return ok;
-        }
-        return failure_key_not_found;
-    }
-
     /* cuckoo_init initializes the hashtable, given an initial
      * hashpower as the argument. */
     cuckoo_status cuckoo_init(const size_t hashtable_init) {
@@ -1712,7 +1560,6 @@ private:
         for (size_t i = 0; i < ti->num_inserts.size(); i++) {
             ti->num_inserts[i].num.store(0);
             ti->num_deletes[i].num.store(0);
-            ti->num_updates[i].num.store(0);
             ti->num_retries[i].num.store(0);
         }
         return ok;
