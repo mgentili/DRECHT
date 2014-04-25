@@ -277,15 +277,15 @@ public:
 
         snapshot_old(ti);
         res = find_one(ti, hv, key, val);
-        unset_hazard_pointer(); //only need to keep track of ptr to old table b/c new never will be deleted until in old pos
 
         // couldn't find key in bucket, and one of the buckets was moved to new table
         if (res == failure_key_moved) {
             snapshot_new(ti);
             res = find_one(ti, hv, key, val);
-            return (res == ok);
+            assert(res == ok || res == failure_key_not_found);
         }
-        
+
+        unset_hazard_pointer(); //only need to keep track of ptr to old table b/c new never will be deleted until in old pos
         return (res == ok);
     }
 
@@ -314,37 +314,38 @@ public:
         check_counterid();
         size_t hv = hashed_key(key);
         TableInfo *ti_old, *ti_new;
-        size_t i1, i2;
+        size_t i1_o, i2_o, i1_n, i2_n;
         cuckoo_status res;
 
         snapshot_old(ti_old);
-        res = insert_one(ti_old, hv, key, val, i1, i2);
-        if (res == failure_key_duplicated) { //found in old table
-            //std::cout << "Key duplicated" << std::endl;
-            //TODO: unlock if not already done
-            //unlock_write_two(ti_old, i1, i2);
-            unset_hazard_pointer();
-            return false;
+
+        // lock and don't unlock
+        res = insert_one(ti_old, hv, key, val, i1_o, i2_o);
+
+        snapshot_new(ti_new); //need to check this to see if expansion in progress
+
+        if (ti_new != ti_old && ti_new != nullptr) {
+            std::cout << "We're migrating buckets in insert!" << std::endl;
+            //try to move both buckets for now
+            //migrate bucket shouldn't ever fail (e.g. need to resize)
+            //because load factor should be sufficiently low
+            //assumes both old buckets are locked
+            try_migrate_bucket(ti_old, ti_new, i1_o);
+            try_migrate_bucket(ti_old, ti_new, i2_o);
         }
-        // One of the buckets was moved to new table
+
+        // One of the buckets was moved to new table, and we didn't
+        // find the key in the old table. We hold both old bucket locks
         if (res == failure_key_moved) {
-            snapshot_new(ti_new);
-            res = insert_one(ti_new, hv, key, val, i1, i2);
-            if (!ti_old->buckets_[i1].hasmigrated) {
-                migrate_bucket(ti_old, ti_new, i1);
-            }
-            if (!ti_old->buckets_[i2].hasmigrated) {
-                migrate_bucket(ti_old, ti_new, i2);
-            }
-            unset_hazard_pointer();
-            if (res == failure_key_duplicated) {
-                return false;
-            }
-            //TODO: unlock if not already done
-            return true;
+            //snapshot_new(ti_new);
+            res = insert_one(ti_new, hv, key, val, i1_n, i2_n);
+            assert(res == failure_key_duplicated || res == ok);
+            unlock_write_two(ti_new, i1_n, i2_n); //TODO: When are we unlocking?
         }
-        assert(res == ok);
-        return true;
+
+        unlock_write_two(ti_old, i1_o, i2_o); //TODO: When are we unlocking?
+        unset_hazard_pointer();
+        return (res == ok);
     }
     
 #if 1
@@ -355,16 +356,28 @@ public:
         check_hazard_pointer();
         check_counterid();
         size_t hv = hashed_key(key);
-        TableInfo *ti;
-        
-        size_t i1, i2;
-        
-        snapshot_and_lock_write_two(hv, ti, i1, i2);
-        const cuckoo_status st = cuckoo_delete(key, hv, ti, i1, i2);
-        unlock_write_two(ti, i1, i2);
-        unset_hazard_pointer();
+        TableInfo *ti_old, *ti_new;
+        size_t i1_o, i2_o, i1_n, i2_n;
+        cuckoo_status res;
 
-        return (st == ok);
+        snapshot_old(ti_old);
+        // lock and don't unlock
+        res = delete_one(ti_old, hv, key, i1_o, i2_o);
+        snapshot_new(ti_new);
+
+        if (ti_new != ti_old && ti_new != nullptr) {
+            std::cout << "We're migrating buckets in erase!" << std::endl;
+            try_migrate_bucket(ti_old, ti_new, i1_o);
+            try_migrate_bucket(ti_old, ti_new, i2_o);
+        }
+
+        if (res == failure_key_moved) {
+            res = delete_one(ti_new, hv, key, i1_n, i2_n);
+            assert(res == ok || res == failure_key_not_found);
+        }
+        unlock_write_two(ti_old, i1_o, i2_o);
+        unset_hazard_pointer();
+        return (res == ok);
     }
 
 
@@ -507,7 +520,7 @@ private:
         std::bitset<SLOT_PER_BUCKET> occupied;
         key_type keys[SLOT_PER_BUCKET];
         mapped_type vals[SLOT_PER_BUCKET];
-        bool hasmoved;
+        bool moved_to_alternate;
         bool hasmigrated;
 
         void setKV(size_t pos, const key_type& k, const mapped_type& v) {
@@ -520,7 +533,7 @@ private:
             occupied.reset(pos);
             (keys+pos)->~key_type();
             (vals+pos)->~mapped_type();
-            hasmoved = true;
+            moved_to_alternate = true;
         }
 
         void clear() {
@@ -622,20 +635,37 @@ private:
                             const mapped_type& val, size_t& i1, size_t& i2) {
         i1 = index_hash(ti, hv);
         i2 = alt_index(ti, hv, i1);
+        //std::cout << "In insert loop for key" << key << std::endl;
         lock_write_two(ti, i1, i2);
-        //TODO: Don't unlock 
+        //TODO: Don't unlock '
         bool res = cuckoo_insert_loop(key, val, hv, ti, i1, i2);
+        //std::cout << "We finished an insert loop for key" << key << std::endl;
+        lock_write_two(ti, i1, i2);
+        
         if (res) {
             return ok;
         }
-
+       
         return failure_key_duplicated;
         //return cuckoo_insert(key, val, hv, ti, i1, i2);
     }
 
+    cuckoo_status delete_one(TableInfo *ti, size_t hv, const key_type& key,
+                             size_t& i1, size_t& i2) {
+        i1 = index_hash(ti, hv);
+        i2 = alt_index(ti, hv, i1);
+        lock_write_two(ti, i1, i2);
+        cuckoo_status res = cuckoo_delete(key, hv, ti, i1, i2);
+
+        return res;
+    }
+
     // assumes bucket in old table is locked the whole time
-    // tries to migrate bucket
-    void migrate_bucket(TableInfo* ti_old, TableInfo* ti_new, size_t old_bucket) {
+    // tries to migrate bucket, returning true on success, false on failure
+    bool try_migrate_bucket(TableInfo* ti_old, TableInfo* ti_new, size_t old_bucket) {
+        if (ti_old->buckets_[old_bucket].hasmigrated) {
+            return false;
+        }
         size_t i1, i2, hv;
         key_type key;
         mapped_type val;
@@ -657,7 +687,9 @@ private:
             unlock_write_two(ti_new, i1, i2);
         }
         ti_old->buckets_[old_bucket].clear();
-        ti_old->buckets_[old_bucket].hasmoved = true;
+        ti_old->buckets_[old_bucket].hasmigrated = true;
+
+        return true;
     }
 
     /* get_version gets the version for a given bucket index */
@@ -843,13 +875,9 @@ private:
         }
     }
 
+    // don't need to because it can never be garbage collected before it becomes an "old" table pointer 
     void snapshot_new(TableInfo*& ti) {
-    TryAcquire:
         ti = new_table_info.load();
-        *hazard_pointer = static_cast<void*>(ti); //to keep track of which tables are currently in use
-        if (ti != new_table_info.load()) {
-            goto TryAcquire;
-        }
     }
 
     /* snapshot_and_get_version_two loads the table_info pointer and gets the versions
@@ -1087,6 +1115,10 @@ private:
             // Picks a random slot to start from
             for (size_t slot = 0; slot < SLOT_PER_BUCKET && q.not_full(); slot++) {
                 lock_path(ti, x.bucket);
+
+                if (ti->buckets_[x.bucket].hasmigrated) { //TODO: Add all hasmigrated
+                    return b_slot(0, 0, -1);
+                }
                 if (!ti->buckets_[x.bucket].occupied[slot]) {
                     // We can terminate the search here
                     x.pathcode = x.pathcode * SLOT_PER_BUCKET + slot;
@@ -1106,6 +1138,9 @@ private:
                 // the bucket so that no changes occur while
                 // iterating.
                 lock_path(ti, y.bucket);
+                if (ti->buckets_[y.bucket].hasmigrated) {
+                    return b_slot(0, 0, -1);
+                }
                 for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
                     if (!ti->buckets_[y.bucket].occupied.test(j)) {
                         y.pathcode = y.pathcode * SLOT_PER_BUCKET + j;
@@ -1348,9 +1383,13 @@ private:
 
     /* try_read_from-bucket will search the bucket for the given key
      * and store the associated value if it finds it. */
-    static bool try_read_from_bucket(const TableInfo *ti, 
+    static cuckoo_status try_read_from_bucket(const TableInfo *ti, 
                                      const key_type &key, mapped_type &val,
                                      const size_t i) {
+        if (ti->buckets_[i].hasmigrated) {
+            return failure_key_moved;
+        }
+
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
             if (!ti->buckets_[i].occupied[j]) {
                 continue;
@@ -1358,10 +1397,10 @@ private:
 
             if (eqfn(key, ti->buckets_[i].keys[j])) {
                 val = ti->buckets_[i].vals[j];
-                return true;
+                return ok;
             }
         }
-        return false;
+        return failure_key_not_found;
     }
 
     /* add_to_bucket will insert the given key-value pair into the
@@ -1380,35 +1419,42 @@ private:
      * it will search the entire bucket and return false if it finds
      * the key already in the table (duplicate key error) and true
      * otherwise. */
-    static bool try_add_to_bucket(TableInfo *ti, 
+    static cuckoo_status try_add_to_bucket(TableInfo *ti, 
                                   const key_type &key, const mapped_type &val,
                                   const size_t i, int& j) {
         j = -1;
         bool found_empty = false;
 
+        if (ti->buckets_[i].hasmigrated) {
+            return failure_key_moved;
+        }
         for (size_t k = 0; k < SLOT_PER_BUCKET; k++) {
             if (ti->buckets_[i].occupied[k]) {
                 if (eqfn(key, ti->buckets_[i].keys[k])) {
-                    return false;
+                    return failure_key_duplicated;
                 }
             } else {
                 if (!found_empty) {
                     found_empty = true;
                     j = k;
-                    if (!ti->buckets_[i].hasmoved) {
+                    if (!ti->buckets_[i].moved_to_alternate) {
                         //std::cout << "No move yet" << std::endl;
                         break;
                     }
                 }
             }
         }
-        return true;
+        return ok;
     }
 
     /* try_del_from_bucket will search the bucket for the given key,
      * and set the slot of the key to empty if it finds it. */
-    static bool try_del_from_bucket(TableInfo *ti, 
+    static cuckoo_status try_del_from_bucket(TableInfo *ti, 
                                     const key_type &key, const size_t i) {
+        if (ti->buckets_[i].hasmigrated) {
+            return failure_key_moved;
+        }
+
         for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
             if (!ti->buckets_[i].occupied[j]) {
                 continue;
@@ -1416,10 +1462,10 @@ private:
             if (eqfn(ti->buckets_[i].keys[j], key)) {
                 ti->buckets_[i].eraseKV(j);
                 ti->num_deletes[counterid].num.fetch_add(1, std::memory_order_relaxed);
-                return true;
+                return ok;
             }
         }
-        return false;
+        return failure_key_not_found;
     }
 
     /* try_update_bucket will search the bucket for the given key and
@@ -1463,12 +1509,20 @@ private:
     static cuckoo_status cuckoo_find(const key_type& key, mapped_type& val,
                                      const size_t hv, const TableInfo *ti,
                                      const size_t i1, const size_t i2) {
-        if (try_read_from_bucket(ti, key, val, i1)) {
+        cuckoo_status res1, res2;
+        res1 = try_read_from_bucket(ti, key, val, i1);
+        if (res1 == ok) {
             return ok;
         }
-        if (try_read_from_bucket(ti, key, val, i2)) {
+        res2 = try_read_from_bucket(ti, key, val, i2);
+        if(res2 == ok) {
             return ok;
         }
+
+        if (res1 == failure_key_moved || res2 == failure_key_moved) {
+            return failure_key_moved;
+        }
+
         return failure_key_not_found;
     }
 
@@ -1483,58 +1537,40 @@ private:
                                 const size_t hv, TableInfo *ti,
                                 const size_t i1, const size_t i2) {
         mapped_type oldval;
-        int res1, res2;
+        int open1, open2;
+        cuckoo_status res1, res2;
+        
+        //std::cout << "Bucket had a moved thing" << std::endl;
+        res1 = try_add_to_bucket(ti, key, val, i1, open1);
+        if (res1 == failure_key_duplicated) {
+            unlock_write_two(ti, i1, i2);
+            //std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
+            return res1;
+        }
 
-        //shortcut if nothing has been moved to an alternative bucket yet 
-        if (!ti->buckets_[i1].hasmoved) {
-            if(!try_add_to_bucket(ti, key, val, i1, res1)) {
-                unlock_write_two(ti, i1, i2);
-                //std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
-                return failure_key_duplicated;
-            }
+        res2 = try_add_to_bucket(ti, key, val, i2, open2);
+        if (res2 == failure_key_duplicated) {
+            unlock_write_two(ti, i1, i2);
+            //std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
+            return res2;
+        }
 
-            if(res1 != -1) {
-                //std::cout << "Successful shortcut" << std::endl;
-                add_to_bucket(ti, key, val, i1, res1);
-                unlock_write_two(ti, i1, i2);
-                return ok;
-            }
+        if (res1 == failure_key_moved || res2 == failure_key_moved) {
+            unlock_write_two(ti, i1, i2);
+            std::cout << "Key moved" << key << " , " << val << " , " << hv << std::endl;
+            return failure_key_moved;
+        }
 
-            if (!try_add_to_bucket(ti, key, val, i2, res2)) {
-                unlock_write_two(ti, i1, i2);
-                //std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
-                return failure_key_duplicated;
-            }
-
-            if (res2 != -1) {
-                add_to_bucket(ti, key, val, i2, res2);
-                unlock_write_two(ti, i1, i2);
-                return ok;
-            }
-        } else {
-            //std::cout << "Bucket had a moved thing" << std::endl;
-            if (!try_add_to_bucket(ti, key, val, i1, res1)) {
-                unlock_write_two(ti, i1, i2);
-                //std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
-                return failure_key_duplicated;
-            }
-
-            if (!try_add_to_bucket(ti, key, val, i2, res2)) {
-                unlock_write_two(ti, i1, i2);
-                //std::cout << "Key duplicated" << key << " , " << val << " , " << hv << std::endl;
-                return failure_key_duplicated;
-            }
-            if (res1 != -1) {
-                add_to_bucket(ti, key, val, i1, res1);
-                unlock_write_two(ti, i1, i2);
-                return ok;
-            }
-            //std::cout << "Have to check second bucket" << std::endl;
-            if (res2 != -1) {
-                add_to_bucket(ti, key, val, i2, res2);
-                unlock_write_two(ti, i1, i2);
-                return ok;
-            }
+        if (open1 != -1) {
+            add_to_bucket(ti, key, val, i1, open1);
+            unlock_write_two(ti, i1, i2);
+            return ok;
+        }
+        //std::cout << "Have to check second bucket" << std::endl;
+        if (open2 != -1) {
+            add_to_bucket(ti, key, val, i2, open2);
+            unlock_write_two(ti, i1, i2);
+            return ok;
         }
 
         // we are unlucky, so let's perform cuckoo hashing
@@ -1586,7 +1622,6 @@ private:
             // If the insert failed with failure_key_duplicated, it
             // returns here
             if (st == failure_key_duplicated) {
-                unset_hazard_pointer();
                 return false;
             }
             // If it failed with failure_under_expansion, the insert
@@ -1601,21 +1636,29 @@ private:
             snapshot_and_lock_write_two(hv, ti, i1, i2);
             st = cuckoo_insert(key, val, hv, ti, i1, i2);
         }
-        unset_hazard_pointer();
         return true;
     }
 
-    /* cuckoo_delete searches the table for the given key and sets the
+    /* TODO: Change to support prefetching
+     * cuckoo_delete searches the table for the given key and sets the
      * slot with that key to empty if it finds it. It expects the
      * locks to be taken and released outside the function. */
     cuckoo_status cuckoo_delete(const key_type &key, const size_t hv,
                                 TableInfo *ti, const size_t i1,
                                 const size_t i2) {
-        if (try_del_from_bucket(ti, key, i1)) {
+        cuckoo_status res1, res2;
+        res1 = try_del_from_bucket(ti, key, i1);
+        if (res1 == ok) {
             return ok;
         }
-        if (try_del_from_bucket(ti, key, i2)) {
+        res2 = try_del_from_bucket(ti, key, i2);
+        if (res2 == ok) {
             return ok;
+        }
+
+        //couldn't find key in either bucket, and a bucket was moved
+        if (res1 == failure_key_moved || res2 == failure_key_moved) {
+            return failure_key_moved;
         }
         return failure_key_not_found;
     }
@@ -1675,12 +1718,6 @@ private:
         return ok;
     }
 
-    /*void increment_retries(TableInfo *ti) {
-        //ti->num_inserts[counterid].num.fetch_add(1, std::memory_order_relaxed);
-        size_t x;
-        x = ti->num_retries[counterid].num.fetch_add(1, std::memory_order_relaxed);
-        std::cout << "Counter:" << counterid << "Number of retries?" << x << std::endl;
-    }*/
     /* cuckoo_size returns the number of elements in the given
      * table. */
     size_t cuckoo_size(const TableInfo *ti) {
