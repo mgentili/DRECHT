@@ -38,7 +38,8 @@ class cuckoohash_map {
         failure_function_not_supported = 5,
         failure_table_full = 6,
         failure_under_expansion = 7,
-        failure_key_moved = 8
+        failure_key_moved = 8,
+        failure_already_migrating_all = 9
     } cuckoo_status;
 
     /* This is a hazard pointer, used to indicate which version of the
@@ -79,6 +80,7 @@ class cuckoohash_map {
             lock_.lock();
             auto it = old_pointers.begin();
             while (it != old_pointers.end()) {
+                std::cout << "Hazard pointer" << *it << std::endl;
                 bool deleteable = true;
                 for (auto hpit = hp_.cbegin(); hpit != hp_.cend(); hpit++) {
                     if (*hpit == *it) {
@@ -87,6 +89,7 @@ class cuckoohash_map {
                     }
                 }
                 if (deleteable) {
+                    std::cout << "Deleting hazard pointer" << *it << std::endl;
                     LIBCUCKOO_DBG("deleting %p\n", *it);
                     delete *it;
                     it = old_pointers.erase(it);
@@ -192,6 +195,14 @@ public:
         unset_hazard_pointer();
     }
 
+    void force_migration() {
+        check_hazard_pointer();
+        TableInfo *ti_old, *ti_new;
+        snapshot_old(ti_old);
+        snapshot_new(ti_new);
+        try_migrate_all(ti_old, ti_new, 1);
+    }
+
     /*! size returns the number of items currently in the hash table.
      * Since it doesn't lock the table, elements can be inserted
      * during the computation, so the result may not necessarily be
@@ -227,7 +238,7 @@ public:
     /* undergoing_expansion returns true if there are currently two tables in use */
     bool undergoing_expansion() {
         TableInfo* ti_new;
-        snapshot_new(ti_new)
+        snapshot_new(ti_new);
         return (ti_new == nullptr);
     }
     /*! hashpower returns the hashpower of the table, which is log<SUB>2</SUB>(the
@@ -270,11 +281,13 @@ public:
         cuckoo_status res;
 
         snapshot_old(ti);
+        std::cout << "Starting find of key" << key << std::endl;
         res = find_one(ti, hv, key, val);
 
         // couldn't find key in bucket, and one of the buckets was moved to new table
         if (res == failure_key_moved) {
             snapshot_new(ti);
+            assert(ti != nullptr);
             res = find_one(ti, hv, key, val);
             assert(res == ok || res == failure_key_not_found);
         }
@@ -312,35 +325,47 @@ public:
         cuckoo_status res;
 
         snapshot_old(ti_old);
-
+        std::cout << "Starting insert of key" << key << std::endl;
         // lock and don't unlock
         res = insert_one(ti_old, hv, key, val, i1_o, i2_o);
 
         snapshot_new(ti_new); //need to check this to see if expansion in progress
-
+        std::cout << "In insert with old pointer" << ti_old << "new pointer" << ti_new << std::endl;
         // expansion in progress, so moving buckets over
         if (ti_new != ti_old && ti_new != nullptr) {
-            std::cout << "We're migrating buckets in insert!" << std::endl;
+            std::cout << "trying to migrate buckets for insert!" << std::endl;
             //try to move both buckets for now
             //migrate bucket shouldn't ever fail (e.g. need to resize)
             //because load factor should be sufficiently low
             //assumes both old buckets are locked
             try_migrate_bucket(ti_old, ti_new, i1_o);
             try_migrate_bucket(ti_old, ti_new, i2_o);
+
+            // if sufficient number of buckets moved, start a thread that starts from beginning of table to end
+            // trying to move each bucket
+            std::cout << "Percent moved buckets is" << double(count_migrated_buckets(ti_old))/hashsize(ti_old->hashpower_) << std::endl;
+            if (double(count_migrated_buckets(ti_old))/hashsize(ti_old->hashpower_) > MIGRATE_THRESHOLD) {
+                try_migrate_all(ti_old, ti_new, 1);
+            }
+
         }
 
         // This is triggered only if we couldn't find the key in either
         // old table bucket and one of the buckets was moved
         // We hold both old bucket locks at the start
         if (res == failure_key_moved) {
-            //snapshot_new(ti_new);
+            snapshot_new(ti_new);
+            assert(ti_new != nullptr);
+            std::cout << "result is failure_key_moved! with new pointer" << ti_new << std::endl;
             res = insert_one(ti_new, hv, key, val, i1_n, i2_n);
             assert(res == failure_key_duplicated || res == ok);
             unlock_write_two(ti_new, i1_n, i2_n); //TODO: When are we unlocking?
         }
-
+        std::cout << "Ending insert of key" << key << std::endl;
         unlock_write_two(ti_old, i1_o, i2_o); //TODO: When are we unlocking?
+        std::cout << "Unsetting hazard pointer" << key << std::endl;
         unset_hazard_pointer();
+        std::cout << "Returning!" << key << std::endl;
         return (res == ok);
     }
     
@@ -367,6 +392,8 @@ public:
         }
 
         if (res == failure_key_moved) {
+            snapshot_new(ti_new);
+            assert(ti_new != nullptr);
             res = delete_one(ti_new, hv, key, i1_n, i2_n);
             assert(res == ok || res == failure_key_not_found);
             unlock_write_two(ti_new, i1_n, i2_n);
@@ -589,7 +616,7 @@ private:
     // tries to migrate bucket, returning true on success, false on failure
     bool try_migrate_bucket(TableInfo* ti_old, TableInfo* ti_new, size_t old_bucket) {
         if (ti_old->buckets_[old_bucket].hasmigrated) {
-            std::cout << "Already migrated bucket " << old_bucket << std::endl;
+            //std::cout << "Already migrated bucket " << old_bucket << std::endl;
             return false;
         }
         size_t i1, i2, hv;
@@ -608,20 +635,70 @@ private:
             hv = hashed_key(key);
             i1 = index_hash(ti_new, hv);
             i2 = alt_index(ti_new, hv, i1);
-            std::cout << "Moving element key: " << key << "val" << val << "to pos" << i1 << "or" << i2 << std::endl;
+            //std::cout << "Moving element key: " << key << "val" << val << "to pos" << i1 << "or" << i2 << std::endl;
             lock_write_two(ti_new, i1, i2);
-            std::cout << "Successfully locked!" << std::endl;
             res = cuckoo_insert(key, val, hv, ti_new, i1, i2); // TODO: cuckoo_insert unlocks locks for now
-            std::cout << "Insert finished!" << std::endl;
             assert(res == ok); // cannot have inserted into new table before
             //unlock_write_two(ti_new, i1, i2);
 
             //to keep track of current number of elements in table
             ti_old->num_deletes[counterid].num.fetch_add(1, std::memory_order_relaxed);
         }
+
         ti_old->buckets_[old_bucket].hasmigrated = true;
         ti_old->num_migrated_buckets[counterid].num.fetch_add(1, std::memory_order_relaxed);
         return true;
+    }
+
+    void migrate_bucket_range(TableInfo* ti_old, TableInfo* ti_new, size_t begin, size_t end) {
+        check_hazard_pointer();
+        check_counterid();
+        assert(ti_old == table_info.load());
+        assert(ti_new == new_table_info.load());
+        for (size_t i = begin; i < end; i++) {
+            lock_write(ti_old, i);
+            std::cout << "In migrate_bucket_range. Trying to migrate bucket " << i << std::endl;
+            try_migrate_bucket(ti_old, ti_new, i);
+            unlock_write(ti_old, i);
+        }
+
+        std::cout << "migrate_bucket_range done!" << std::endl;
+
+        if(count_migrated_buckets(ti_old) == hashsize(ti_old->hashpower_)) {
+            cuckoo_status res = cuckoo_expand_end();
+            if (res != ok) {
+                std::cout << "Someone tried to call cuckoo_expand_end before me" << std::endl;
+                return;
+            }
+            migrate_all_lock.unlock();
+        }
+
+
+    }
+
+    cuckoo_status try_migrate_all(TableInfo* ti_old, TableInfo* ti_new, size_t threadnum) {
+        if(!migrate_all_lock.try_lock()) {
+            //std::cout << "Already migrating all" << std::endl;
+            return failure_already_migrating_all;
+        }
+
+        std::cout << "In try_migrate_all and starting new threads" << std::endl;
+        const size_t buckets_per_thread = hashsize(ti_old->hashpower_) / threadnum;
+        std::vector<std::thread> migrate_threads(threadnum);
+        for (size_t i = 0; i < threadnum-1; i++) {
+            migrate_threads[i] = std::thread( &cuckoohash_map<Key, T, Hash>::migrate_bucket_range,
+                this, ti_old, ti_new, 
+                i*buckets_per_thread, (i+1)*buckets_per_thread);
+        }
+        // remaining buckets
+        migrate_threads[threadnum-1] = std::thread(&cuckoohash_map<Key, T, Hash>::migrate_bucket_range,
+            this, ti_old, ti_new, 
+            (threadnum-1)*buckets_per_thread, hashsize(ti_old->hashpower_));
+
+        for (size_t i = 0; i < threadnum; i++) {
+            migrate_threads[i].detach();
+        }
+        return ok;
     }
 
     /* get_version gets the version for a given bucket index */
@@ -673,14 +750,17 @@ private:
     }
 
     static inline void unlock(const TableInfo *ti, const size_t i, const size_t lock_level) {
-        if ((~ti->buckets_[i].version.num.load() & lock_level) != 0) {
+        /*if ((~ti->buckets_[i].version.num.load() & lock_level) != 0) {
             std::cout << "Using table with size" << ti->hashpower_ << std::endl;
             std::cout << "Starting unlock of" << i << "with version" << ti->buckets_[i].version.num.load() << "and lock level" << lock_level << std::endl;
-        }
+        }*/
         ti->buckets_[i].version.num += (1<<2) - lock_level;
         //std::cout << "Ending unlock of" << i << "with version"<< ti->buckets_[i].version.num.load() << "and lock level" << lock_level << std::endl;
     }
 
+    static inline void try_lock_write(const TableInfo *ti, const size_t i) {
+
+    }
     /* lock_paths locks out concurrent writers, but allows concurrent readers
      */
     static inline void lock_path(const TableInfo *ti, const size_t i) {
@@ -927,7 +1007,6 @@ private:
     static const size_t W = 1 << 1;
     static const size_t P = 1 << 1;
 
-
     // key size in bytes
     static const size_t kKeySize = sizeof(key_type);
 
@@ -946,6 +1025,9 @@ private:
 
     // The maximum depth of a BFS path
     static const size_t MAX_BFS_DEPTH = 4;
+
+    // the % of moved buckets above which migrate_all is called
+    static constexpr double MIGRATE_THRESHOLD = 0.8;
 
     /* hashsize returns the number of buckets corresponding to a given
      * hashpower. */
@@ -1581,6 +1663,16 @@ private:
         return ok;
     }
 
+    /* count_migrated_buckets returns the number of migrated buckets in the given
+     * table. */
+    size_t count_migrated_buckets(const TableInfo *ti) {
+        size_t num_migrated = 0;
+        for (size_t i = 0; i < ti->num_inserts.size(); i++) {
+            num_migrated += ti->num_migrated_buckets[i].num.load();
+        }
+        return num_migrated;
+    }
+
     /* cuckoo_clear empties the table, calling the destructors of all
      * the elements it removes from the table. It assumes the locks
      * are taken as necessary. */
@@ -1635,6 +1727,7 @@ private:
     // expansions and iterator constructions cannot occur
     // simultaneously.
     std::mutex expansion_lock;
+    std::mutex migrate_all_lock;
 
     /* cuckoo_expand_start tries to create a new table, succeeding as long as 
      * there is no ongoing expansion and no other thread has already created a new table
@@ -1671,12 +1764,17 @@ private:
             std::cout << "Someone swapped the old table pointer before we could" << std::endl;
             return failure_under_expansion;
         }
+
+        std::cout << "Finished swapping old_ti with new" << std::endl;
         // Rather than deleting ti now, we store it in
         // old_table_infos. The hazard pointer manager will delete it
         // if no other threads are using the pointer.
         old_table_infos.push_back(old_ti);
         global_hazard_pointers.delete_unused(old_table_infos);
         new_table_info.store(nullptr); //TODO: Need to CAS?
+        std::cout << "Old pointer is " << old_ti << "New pointer is" << table_info.load() << std::endl;
+        std::cout << "New table pointer is " << new_table_info.load() << std::endl;
+        return ok;
     }
 
     /* cuckoo_expand_simple is a simpler version of expansion than
