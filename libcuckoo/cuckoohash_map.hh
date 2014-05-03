@@ -286,7 +286,7 @@ public:
         
         TableInfo *ti;
         cuckoo_status res;
-
+    RETRY:
         snapshot_old(ti);
         //std::cout << "Starting find of key" << key << std::endl;
         res = find_one(ti, hv, key, val);
@@ -294,8 +294,11 @@ public:
         // couldn't find key in bucket, and one of the buckets was moved to new table
         if (res == failure_key_moved) {
             snapshot_new(ti);
-            if (ti != nullptr) {
-
+            // the new table's pointer has already moved
+            if (ti == nullptr) {
+                unset_hazard_pointer();
+                std::cout << "ti_new is nullptr in failure_key_moved" << ti << std::endl;
+                goto RETRY;
             }
             assert(ti != nullptr);
             res = find_one(ti, hv, key, val);
@@ -333,7 +336,8 @@ public:
         TableInfo *ti_old, *ti_new;
         size_t i1_o, i2_o, i1_n, i2_n;
         cuckoo_status res;
-
+    RETRY:
+        size();
         snapshot_old(ti_old);
         //std::cout << "Starting insert of key" << key << std::endl;
         
@@ -367,9 +371,23 @@ public:
         // We hold both old bucket locks at the start
         if (res == failure_key_moved) {
             snapshot_new(ti_new);
+            // all buckets have already been moved, and now old_table_ptr has the new one
+            if (ti_new == nullptr) {
+                unlock_write_two(ti_old, i1_o, i2_o);
+                unset_hazard_pointer();
+                std::cout << "ti_new is nullptr in failure_key_moved" << ti_new << std::endl;
+                goto RETRY;
+            }
             assert(ti_new != nullptr);
             std::cout << "result is failure_key_moved! with new pointer" << ti_new << std::endl;
             res = insert_one(ti_new, hv, key, val, i1_n, i2_n);
+            if (res == failure_key_moved) {
+                std::cout << "Couldn't insert into new table either?! Hopefully finish moving buckets soon..." << std::endl;
+                unlock_write_two(ti_new, i1_n, i2_n);
+                unlock_write_two(ti_old, i1_o, i2_o);
+                unset_hazard_pointer();
+                goto RETRY;
+            }
             assert(res == failure_key_duplicated || res == ok);
             unlock_write_two(ti_new, i1_n, i2_n); //TODO: When are we unlocking?
         }
@@ -388,7 +406,7 @@ public:
         TableInfo *ti_old, *ti_new;
         size_t i1_o, i2_o, i1_n, i2_n;
         cuckoo_status res;
-
+    RETRY:
         snapshot_old(ti_old);
         // lock and don't unlock
         res = delete_one(ti_old, hv, key, i1_o, i2_o);
@@ -402,6 +420,12 @@ public:
 
         if (res == failure_key_moved) {
             snapshot_new(ti_new);
+            if (ti_new == nullptr) {
+                unlock_write_two(ti_old, i1_o, i2_o);
+                unset_hazard_pointer();
+                std::cout << "ti_new is nullptr in failure_key_moved" << ti_new << std::endl;
+                goto RETRY;
+            }
             assert(ti_new != nullptr);
             res = delete_one(ti_new, hv, key, i1_n, i2_n);
             assert(res == ok || res == failure_key_not_found);
@@ -662,8 +686,18 @@ private:
     void migrate_bucket_range(TableInfo* ti_old, TableInfo* ti_new, size_t begin, size_t end) {
         check_hazard_pointer();
         check_counterid();
-        assert(ti_old == table_info.load());
-        assert(ti_new == new_table_info.load());
+        TableInfo *ti_old_now;
+        snapshot_old(ti_old_now);
+
+        // TableInfo pointer has swapped already, meaning that all buckets already migrated
+        if (ti_old_now != ti_old) {
+            std::cout << "TableInfo ptr swapped in migrate_bucket_range" << std::endl;
+            migrate_all_lock.unlock();
+            unset_hazard_pointer();
+            return;
+        }
+        //assert(ti_old == table_info.load());
+        //assert(ti_new == new_table_info.load());
         for (size_t i = begin; i < end; i++) {
             lock_write(ti_old, i);
             std::cout << "In migrate_bucket_range. Trying to migrate bucket " << i << std::endl;
@@ -1685,6 +1719,7 @@ private:
      * hashpower as the argument. */
     cuckoo_status cuckoo_init(const size_t hashtable_init) {
         table_info.store(new TableInfo(hashtable_init));
+        new_table_info.store(nullptr);
         cuckoo_clear(table_info.load());
         return ok;
     }
@@ -1766,6 +1801,7 @@ private:
         }
         TableInfo *ti = new TableInfo(n); //new, larger table
         TableInfo *expected = nullptr; 
+        cuckoo_clear(ti); //TODO: Need to zero memory? Might have multiple allocations simultaneously
         if (!new_table_info.compare_exchange_weak(expected, ti, 
                                                     std::memory_order_release,
                                                     std::memory_order_relaxed)) {
@@ -1798,7 +1834,7 @@ private:
         old_table_infos.push_back(old_ti);
         global_hazard_pointers.delete_unused(old_table_infos);
         new_table_info.store(nullptr); //TODO: Need to CAS?
-        std::cout << "Old pointer is " << old_ti << "New pointer is" << table_info.load() << std::endl;
+        std::cout << "Old pointer was " << old_ti << "and now is" << table_info.load() << std::endl;
         std::cout << "New table pointer is " << new_table_info.load() << std::endl;
         return ok;
     }
