@@ -12,17 +12,17 @@ CPPFLAGS=""
 CFLAGS=""
 CXXFLAGS=""
 dnl Regular debugging
-dnl AX_CHECK_COMPILE_FLAG([-g], [CPPFLAGS="$CPPFLAGS -g"])
-dnl AX_CHECK_COMPILE_FLAG([-gdwarf-2], [CPPFLAGS="$CPPFLAGS -gdwarf-2"])
+AX_CHECK_COMPILE_FLAG([-g], [CPPFLAGS="$CPPFLAGS -g"])
+AX_CHECK_COMPILE_FLAG([-gdwarf-2], [CPPFLAGS="$CPPFLAGS -gdwarf-2"])
 
 dnl Profiling
 dnl AX_CHECK_COMPILE_FLAG([-pg], [CPPFLAGS="$CPPFLAGS -pg"])
 
 dnl Optimized
-AX_CHECK_COMPILE_FLAG([-O4], [CPPFLAGS="$CPPFLAGS -O4"],
-                      [AX_CHECK_COMPILE_FLAG([-O3], [CPPFLAGS="$CPPFLAGS -O3"])]
-                      )
-AX_CHECK_COMPILE_FLAG([-DNDEBUG], [CPPFLAGS="$CPPFLAGS -DNDEBUG"])
+dnl AX_CHECK_COMPILE_FLAG([-O4], [CPPFLAGS="$CPPFLAGS -O4"],
+dnl                      [AX_CHECK_COMPILE_FLAG([-O3], [CPPFLAGS="$CPPFLAGS -O3"])]
+dnl                      )
+dnl AX_CHECK_COMPILE_FLAG([-DNDEBUG], [CPPFLAGS="$CPPFLAGS -DNDEBUG"])
 
 # Determine flags specific to C++
 AC_LANG_PUSH([C++])
