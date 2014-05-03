@@ -173,10 +173,15 @@ public:
      * the hash table, also destroying all remaining elements in the
      * table. */
     ~cuckoohash_map() {
-        TableInfo *ti = table_info.load();
-        if (ti != nullptr) {
-            delete ti;
+        TableInfo *ti_old = table_info.load();
+        TableInfo *ti_new = new_table_info.load();
+        if (ti_old != nullptr) {
+            delete ti_old;
         }
+        if (ti_new != nullptr) {
+            delete ti_new;
+        }
+
         for (auto it = old_table_infos.cbegin(); it != old_table_infos.cend(); it++) {
             delete *it;
         }
@@ -214,6 +219,8 @@ public:
         snapshot_new(ti_new);
         size_t s1 = cuckoo_size(ti_old);
         size_t s2 = cuckoo_size(ti_new);
+        std::cout << "Old table size" << s1 << std::endl;
+        std::cout << "New table size" << s2 << std::endl;
         unset_hazard_pointer();
         return s1+s2;
     }
@@ -281,12 +288,15 @@ public:
         cuckoo_status res;
 
         snapshot_old(ti);
-        std::cout << "Starting find of key" << key << std::endl;
+        //std::cout << "Starting find of key" << key << std::endl;
         res = find_one(ti, hv, key, val);
 
         // couldn't find key in bucket, and one of the buckets was moved to new table
         if (res == failure_key_moved) {
             snapshot_new(ti);
+            if (ti != nullptr) {
+
+            }
             assert(ti != nullptr);
             res = find_one(ti, hv, key, val);
             assert(res == ok || res == failure_key_not_found);
@@ -325,12 +335,14 @@ public:
         cuckoo_status res;
 
         snapshot_old(ti_old);
-        std::cout << "Starting insert of key" << key << std::endl;
+        //std::cout << "Starting insert of key" << key << std::endl;
+        
         // lock and don't unlock
         res = insert_one(ti_old, hv, key, val, i1_o, i2_o);
 
         snapshot_new(ti_new); //need to check this to see if expansion in progress
-        std::cout << "In insert with old pointer" << ti_old << "new pointer" << ti_new << std::endl;
+        //std::cout << "In insert with old pointer" << ti_old << "new pointer" << ti_new << std::endl;
+        
         // expansion in progress, so moving buckets over
         if (ti_new != ti_old && ti_new != nullptr) {
             //std::cout << "trying to migrate buckets for insert!" << std::endl;
@@ -343,7 +355,7 @@ public:
 
             // if sufficient number of buckets moved, start a thread that starts from beginning of table to end
             // trying to move each bucket
-            std::cout << "Percent moved buckets is " << double(count_migrated_buckets(ti_old))/hashsize(ti_old->hashpower_) << std::endl;
+            std::cout << "Percent moved buckets is" << double(count_migrated_buckets(ti_old))/hashsize(ti_old->hashpower_) << std::endl;
             if (double(count_migrated_buckets(ti_old))/hashsize(ti_old->hashpower_) > MIGRATE_THRESHOLD) {
                 try_migrate_all(ti_old, ti_new, 1);
             }
@@ -361,11 +373,8 @@ public:
             assert(res == failure_key_duplicated || res == ok);
             unlock_write_two(ti_new, i1_n, i2_n); //TODO: When are we unlocking?
         }
-        std::cout << "Ending insert of key" << key << std::endl;
         unlock_write_two(ti_old, i1_o, i2_o); //TODO: When are we unlocking?
-        std::cout << "Unsetting hazard pointer" << key << std::endl;
         unset_hazard_pointer();
-        std::cout << "Returning!" << key << std::endl;
         return (res == ok);
     }
     
@@ -1302,7 +1311,7 @@ private:
                                 size_t depth, const size_t i1, const size_t i2) {
         //TODO: remove, should never trigger this if statement
         if (depth < 0) {
-            std::cout << "Depth is" << depth << "cuckoopath failed" << std::endl;
+            //std::cout << "Depth is" << depth << "cuckoopath failed" << std::endl;
             return false;
         }
         if (depth == 0) {
@@ -1444,8 +1453,8 @@ private:
             if (cuckoopath_move(ti, cuckoo_path, depth, i1, i2)) {
                 insert_bucket = cuckoo_path[0].bucket;
                 insert_slot = cuckoo_path[0].slot;
-                std::cout << "Cuckoopath move succeeded" << ti->buckets_[i1].version.num.load() 
-                << "," << ti->buckets_[i2].version.num.load() << std::endl;
+                //std::cout << "Cuckoopath move succeeded" << ti->buckets_[i1].version.num.load() 
+                //<< "," << ti->buckets_[i2].version.num.load() << std::endl;
                 assert(insert_bucket == i1 || insert_bucket == i2);
                 assert(ti->buckets_[i1].version.num.load() % 2 == 1);
                 assert(ti->buckets_[i2].version.num.load() % 2 == 1);
@@ -1506,9 +1515,9 @@ private:
         }
 
         // we are unlucky, so let's perform cuckoo hashing
-        std::cout << "Have to run cuckoo hashing" << std::endl;
-        std::cout << "Starting to run cuckoo" << ti->buckets_[i1].version.num.load() 
-                << "," << ti->buckets_[i2].version.num.load() << std::endl;
+        //std::cout << "Have to run cuckoo hashing" << std::endl;
+        //std::cout << "Starting to run cuckoo" << ti->buckets_[i1].version.num.load() 
+        //      << "," << ti->buckets_[i2].version.num.load() << std::endl;
         size_t insert_bucket = 0;
         size_t insert_slot = 0;
         cuckoo_status st = run_cuckoo(ti, i1, i2, insert_bucket, insert_slot);
@@ -1751,7 +1760,7 @@ private:
      * (new_table_pointer != nullptr) */
     cuckoo_status cuckoo_expand_start(size_t n) {
         //we only want to create a new table if there is no ongoing expansion already
-        //Also accouunts for possibility of aomebody already swapping the table pointer
+        //Also accouunts for possibility of somebody already swapping the table pointer
         if (new_table_info.load() != nullptr) {
             return failure_under_expansion;
         }
