@@ -333,7 +333,7 @@ public:
         std::cout << "In insert with old pointer" << ti_old << "new pointer" << ti_new << std::endl;
         // expansion in progress, so moving buckets over
         if (ti_new != ti_old && ti_new != nullptr) {
-            std::cout << "trying to migrate buckets for insert!" << std::endl;
+            //std::cout << "trying to migrate buckets for insert!" << std::endl;
             //try to move both buckets for now
             //migrate bucket shouldn't ever fail (e.g. need to resize)
             //because load factor should be sufficiently low
@@ -343,7 +343,7 @@ public:
 
             // if sufficient number of buckets moved, start a thread that starts from beginning of table to end
             // trying to move each bucket
-            std::cout << "Percent moved buckets is" << double(count_migrated_buckets(ti_old))/hashsize(ti_old->hashpower_) << std::endl;
+            std::cout << "Percent moved buckets is " << double(count_migrated_buckets(ti_old))/hashsize(ti_old->hashpower_) << std::endl;
             if (double(count_migrated_buckets(ti_old))/hashsize(ti_old->hashpower_) > MIGRATE_THRESHOLD) {
                 try_migrate_all(ti_old, ti_new, 1);
             }
@@ -731,9 +731,7 @@ private:
     static inline void lock(const TableInfo *ti, const size_t i, size_t lock_level) {
         size_t v;
         get_version(ti, i, v);
-        /*if ((v & lock_level) != 0) {
-            std::cout << "Starting lock of" << i << "with version" << v << "and lock level" << lock_level << std::endl;
-        }*/
+        //std::cout << "Starting lock of" << i << "with version" << v << "and lock level" << lock_level << std::endl;
         while(true) {
             if( (v & lock_level) != 0) {
                 get_version(ti, i, v);
@@ -750,17 +748,36 @@ private:
     }
 
     static inline void unlock(const TableInfo *ti, const size_t i, const size_t lock_level) {
-        /*if ((~ti->buckets_[i].version.num.load() & lock_level) != 0) {
+        if ((~ti->buckets_[i].version.num.load() & lock_level) != 0) {
             std::cout << "Using table with size" << ti->hashpower_ << std::endl;
             std::cout << "Starting unlock of" << i << "with version" << ti->buckets_[i].version.num.load() << "and lock level" << lock_level << std::endl;
-        }*/
+        }
         ti->buckets_[i].version.num += (1<<2) - lock_level;
         //std::cout << "Ending unlock of" << i << "with version"<< ti->buckets_[i].version.num.load() << "and lock level" << lock_level << std::endl;
     }
 
-    static inline void try_lock_write(const TableInfo *ti, const size_t i) {
+    static inline bool try_lock(const TableInfo *ti, const size_t i, const size_t lock_level) {
+        size_t v;
+        get_version(ti, i, v);
+        if ((v & lock_level) != 0) {
+            return false;
+        }
+        if(ti->buckets_[i].version.num.compare_exchange_weak(
+                v, (size_t) (v | lock_level) , std::memory_order_release, std::memory_order_relaxed)) {
+                return true;
+        }
 
+        return false;
     }
+
+    static inline void try_lock_write(const TableInfo *ti, const size_t i) {
+        try_lock(ti, i, P | W);
+    }
+
+    static inline void try_lock_path(const TableInfo *ti, const size_t i) {
+        try_lock(ti, i, P);
+    }
+
     /* lock_paths locks out concurrent writers, but allows concurrent readers
      */
     static inline void lock_path(const TableInfo *ti, const size_t i) {
@@ -1005,7 +1022,7 @@ private:
     }
 
     static const size_t W = 1 << 1;
-    static const size_t P = 1 << 1;
+    static const size_t P = 1;
 
     // key size in bytes
     static const size_t kKeySize = sizeof(key_type);
@@ -1121,6 +1138,10 @@ private:
             const size_t next = (last == MAX_CUCKOO_COUNT) ? 0 : last+1;
             return next != first;
         }
+
+        bool empty() {
+            return first == last;
+        }
     } __attribute__((__packed__));
 
     /* slot_search searches for a cuckoo path using breadth-first
@@ -1134,7 +1155,7 @@ private:
         // the path starts on
         q.enqueue(b_slot(i1, 0, 0));
         q.enqueue(b_slot(i2, 1, 0));
-        while (q.not_full()) {
+        while (q.not_full() && !q.empty()) {
             b_slot x = q.dequeue();
             // Picks a random slot to start from
             for (size_t slot = 0; slot < SLOT_PER_BUCKET && q.not_full(); slot++) {
@@ -1142,7 +1163,7 @@ private:
 
                 if (ti->buckets_[x.bucket].hasmigrated) {
                     unlock_path(ti, x.bucket);
-                    return b_slot(0, 0, -1);
+                    return b_slot(0, 0, -2);
                 }
                 if (!ti->buckets_[x.bucket].occupied[slot]) {
                     // We can terminate the search here
@@ -1165,7 +1186,7 @@ private:
                 lock_path(ti, y.bucket);
                 if (ti->buckets_[y.bucket].hasmigrated) {
                     unlock_path(ti, y.bucket);
-                    return b_slot(0, 0, -1);
+                    return b_slot(0, 0, -2);
                 }
                 for (size_t j = 0; j < SLOT_PER_BUCKET; j++) {
                     if (!ti->buckets_[y.bucket].occupied.test(j)) {
@@ -1179,6 +1200,7 @@ private:
                 // No empty slots were found, so we push this onto the
                 // queue
                 if (y.depth != static_cast<int>(MAX_BFS_DEPTH)) {
+                    //std::cout << "enqueueing" << y.depth << std::endl;
                     q.enqueue(y);
                 }
             }
@@ -1190,16 +1212,17 @@ private:
 
     /* cuckoopath_search finds a cuckoo path from one of the starting
      * buckets to an empty slot in another bucket. It returns the
-     * depth of the discovered cuckoo path on success, and -1 on
-     * failure. Since it doesn't take locks on the buckets it
+     * depth of the discovered cuckoo path on success, -1 for too long of 
+     * a cuckoo path, and -2 for a moved bucket found along the way.
+     * Since it doesn't take locks on the buckets it
      * searches, the data can change between this function and
      * cuckoopath_move. Thus cuckoopath_move checks that the data
      * matches the cuckoo path before changing it. */
     static int cuckoopath_search(const TableInfo *ti, CuckooRecord* cuckoo_path,
                                  const size_t i1, const size_t i2) {
         b_slot x = slot_search(ti, i1, i2);
-        if (x.depth == -1) {
-            return -1;
+        if (x.depth < 0) {
+            return x.depth;
         }
         // Fill in the cuckoo path slots from the end to the beginning
         for (int i = x.depth; i >= 0; i--) {
@@ -1216,8 +1239,8 @@ private:
             curr->bucket = i1;
             lock_path(ti, curr->bucket);
             if (ti->buckets_[curr->bucket].hasmigrated) {
-                    unlock_path(ti, curr->bucket);
-                    return -1;
+                unlock_path(ti, curr->bucket);
+                return -2;
             }
             if (!ti->buckets_[curr->bucket].occupied[curr->slot]) {
                 // We can terminate here
@@ -1231,8 +1254,8 @@ private:
             curr->bucket = i2;
             lock_path(ti, curr->bucket);
             if (ti->buckets_[curr->bucket].hasmigrated) {
-                    unlock_path(ti, curr->bucket);
-                    return -1;
+                unlock_path(ti, curr->bucket);
+                return -2;
             }
             if (!ti->buckets_[curr->bucket].occupied[curr->slot]) {
                 // We can terminate here
@@ -1252,8 +1275,8 @@ private:
             curr->bucket = alt_index(ti, prevhv, prev->bucket);
             lock_path(ti, curr->bucket);
             if (ti->buckets_[curr->bucket].hasmigrated) {
-                    unlock_path(ti, curr->bucket);
-                    return -1;
+                unlock_path(ti, curr->bucket);
+                return -2;
             }
             if (!ti->buckets_[curr->bucket].occupied[curr->slot]) {
                 // We can terminate here
@@ -1277,7 +1300,11 @@ private:
      * insert-locked buckets will be unlocked. */
     static bool cuckoopath_move(TableInfo *ti, CuckooRecord* cuckoo_path,
                                 size_t depth, const size_t i1, const size_t i2) {
-
+        //TODO: remove, should never trigger this if statement
+        if (depth < 0) {
+            std::cout << "Depth is" << depth << "cuckoopath failed" << std::endl;
+            return false;
+        }
         if (depth == 0) {
             /* There is a chance that depth == 0, when
              * try_add_to_bucket sees i1 and i2 as full and
@@ -1404,39 +1431,30 @@ private:
         // again if the comparison fails.
         unlock_write_two(ti, i1, i2);
 
-        bool done = false;
-        while (!done) {
+        while (true) {
             int depth = cuckoopath_search(ti, cuckoo_path, i1, i2);
-            if (depth < 0) {
-                break;
+            if (depth == -1) {
+                return failure; //happens if path too long
+            }
+
+            if (depth == -2) {
+                return failure; //happens if found moved bucket along path
             }
 
             if (cuckoopath_move(ti, cuckoo_path, depth, i1, i2)) {
                 insert_bucket = cuckoo_path[0].bucket;
                 insert_slot = cuckoo_path[0].slot;
+                std::cout << "Cuckoopath move succeeded" << ti->buckets_[i1].version.num.load() 
+                << "," << ti->buckets_[i2].version.num.load() << std::endl;
                 assert(insert_bucket == i1 || insert_bucket == i2);
                 assert(ti->buckets_[i1].version.num.load() % 2 == 1);
                 assert(ti->buckets_[i2].version.num.load() % 2 == 1);
                 assert(!ti->buckets_[insert_bucket].occupied[insert_slot]);
-                done = true;
-                break;
+                return ok;
             }
         }
-
-        if (!done) {
-            return failure; //happens if path is too long
-        } 
-        //don't need below because we don't care if operating on old table,
-        //will find new table anyways
-        /*else if (ti != table_info.load()) {
-            // Unlock i1 and i2 and signal to cuckoo_insert to try
-            // again. Since we set the hazard pointer to be ti, this
-            // check isn't susceptible to an ABA issue, since a new
-            // pointer can't have the same address as ti.
-            unlock_write_two(ti, i1, i2);
-            return failure_under_expansion;
-        }*/
-        return ok;
+        std::cout << "Should never reach here" << std::endl;
+        return failure;
     }
 
     /* cuckoo_insert tries to insert the given key-value pair into an
@@ -1488,14 +1506,13 @@ private:
         }
 
         // we are unlucky, so let's perform cuckoo hashing
-        //std::cout << "Have to run cuckoo hashing" << std::endl;
+        std::cout << "Have to run cuckoo hashing" << std::endl;
+        std::cout << "Starting to run cuckoo" << ti->buckets_[i1].version.num.load() 
+                << "," << ti->buckets_[i2].version.num.load() << std::endl;
         size_t insert_bucket = 0;
         size_t insert_slot = 0;
         cuckoo_status st = run_cuckoo(ti, i1, i2, insert_bucket, insert_slot);
         if (st == ok) {
-            //TODO: remove
-            assert(ti->buckets_[i1].version.num.load() % 2 == 1);
-            assert(ti->buckets_[i2].version.num.load() % 2 == 1);
             assert(!ti->buckets_[insert_bucket].occupied[insert_slot]);
             assert(insert_bucket == index_hash(ti, hv) || insert_bucket == alt_index(ti, hv, index_hash(ti, hv)));
             /* Since we unlocked the buckets during run_cuckoo,
