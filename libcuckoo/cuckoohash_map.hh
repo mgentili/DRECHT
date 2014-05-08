@@ -339,7 +339,7 @@ public:
     RETRY:
         size();
         snapshot_old(ti_old);
-        //std::cout << "Starting insert of key" << key << std::endl;
+        std::cout << "Starting insert of key" << key << std::endl;
         
         // lock and don't unlock
         res = insert_one(ti_old, hv, key, val, i1_o, i2_o);
@@ -369,7 +369,7 @@ public:
         // This is triggered only if we couldn't find the key in either
         // old table bucket and one of the buckets was moved
         // We hold both old bucket locks at the start
-        if (res == failure_key_moved) {
+        if (res == failure_key_moved || res == failure) {
             snapshot_new(ti_new);
             // all buckets have already been moved, and now old_table_ptr has the new one
             if (ti_new == nullptr) {
@@ -671,6 +671,7 @@ private:
             //std::cout << "Moving element key: " << key << "val" << val << "to pos" << i1 << "or" << i2 << std::endl;
             lock_write_two(ti_new, i1, i2);
             res = cuckoo_insert(key, val, hv, ti_new, i1, i2); // TODO: cuckoo_insert unlocks locks for now
+            //TODO: What to do if this insert fails?!
             assert(res == ok); // cannot have inserted into new table before
             //unlock_write_two(ti_new, i1, i2);
 
@@ -711,12 +712,13 @@ private:
             cuckoo_status res = cuckoo_expand_end();
             if (res != ok) {
                 std::cout << "Someone tried to call cuckoo_expand_end before me" << std::endl;
+                unset_hazard_pointer();
                 return;
             }
             migrate_all_lock.unlock();
         }
 
-
+        unset_hazard_pointer();
     }
 
     cuckoo_status try_migrate_all(TableInfo* ti_old, TableInfo* ti_new, size_t threadnum) {
@@ -1337,17 +1339,13 @@ private:
      * to make an empty slot in one of the buckets in cuckoo_insert.
      * Before the start of this function, the two insert-locked
      * buckets were unlocked in run_cuckoo. At the end of the
-     * function, if the function returns true (success), then the last
+     * function, if the function returns ok (success), then the last
      * bucket it looks at (which is either i1 or i2 in run_cuckoo)
      * remains locked. If the function is unsuccessful, then both
      * insert-locked buckets will be unlocked. */
-    static bool cuckoopath_move(TableInfo *ti, CuckooRecord* cuckoo_path,
+    static cuckoo_status cuckoopath_move(TableInfo *ti, CuckooRecord* cuckoo_path,
                                 size_t depth, const size_t i1, const size_t i2) {
-        //TODO: remove, should never trigger this if statement
-        if (depth < 0) {
-            //std::cout << "Depth is" << depth << "cuckoopath failed" << std::endl;
-            return false;
-        }
+
         if (depth == 0) {
             /* There is a chance that depth == 0, when
              * try_add_to_bucket sees i1 and i2 as full and
@@ -1361,13 +1359,13 @@ private:
             lock_write_two(ti, i1, i2);
             if (ti->buckets_[i1].hasmigrated || ti->buckets_[i2].hasmigrated) {
                 unlock_write_two(ti, i1, i2);
-                return false;
+                return failure_key_moved;
             }
             if (!ti->buckets_[bucket].occupied[cuckoo_path[0].slot]) {
-                return true;
+                return ok;
             } else {
                 unlock_write_two(ti, i1, i2);
-                return false;
+                return failure;
             }
         }
 
@@ -1400,7 +1398,7 @@ private:
                 } else {
                     unlock_write_two(ti, fb, tb);
                 }
-                return false;
+                return failure_key_moved;
             }
             /* We plan to kick out fs, but let's check if it is still
              * there; there's a small chance we've gotten scooped by a
@@ -1417,7 +1415,7 @@ private:
                 } else {
                     unlock_write_two(ti, fb, tb);
                 }
-                return false;
+                return failure;
             }
 
             ti->buckets_[tb].setKV(ts, ti->buckets_[fb].keys[fs], ti->buckets_[fb].vals[fs]);
@@ -1435,7 +1433,7 @@ private:
             }
             depth--;
         }
-        return true;
+        return ok;
     }
 
     /* run_cuckoo performs cuckoo hashing on the table in an attempt
@@ -1450,6 +1448,7 @@ private:
                              size_t &insert_bucket, size_t &insert_slot) {
 
         CuckooRecord cuckoo_path[MAX_BFS_DEPTH+1];
+        cuckoo_status res;
 
         // We must unlock i1 and i2 here, so that cuckoopath_search
         // and cuckoopath_move can lock buckets as desired without
@@ -1476,15 +1475,16 @@ private:
 
         while (true) {
             int depth = cuckoopath_search(ti, cuckoo_path, i1, i2);
+            std::cout << "Depth of cuckoopath_search is" << depth << std::endl;
             if (depth == -1) {
                 return failure; //happens if path too long
             }
 
             if (depth == -2) {
-                return failure; //happens if found moved bucket along path
+                return failure_key_moved; //happens if found moved bucket along path
             }
-
-            if (cuckoopath_move(ti, cuckoo_path, depth, i1, i2)) {
+            res = cuckoopath_move(ti, cuckoo_path, depth, i1, i2);
+            if (res == ok) {
                 insert_bucket = cuckoo_path[0].bucket;
                 insert_slot = cuckoo_path[0].slot;
                 //std::cout << "Cuckoopath move succeeded" << ti->buckets_[i1].version.num.load() 
@@ -1494,6 +1494,11 @@ private:
                 assert(ti->buckets_[i2].version.num.load() % 2 == 1);
                 assert(!ti->buckets_[insert_bucket].occupied[insert_slot]);
                 return ok;
+            }
+
+            if (res == failure_key_moved) {
+                std::cout << "Found moved bucket when running cuckoopath_move" << std::endl;
+                return failure_key_moved;
             }
         }
         std::cout << "Should never reach here" << std::endl;
@@ -1549,7 +1554,7 @@ private:
         }
 
         // we are unlucky, so let's perform cuckoo hashing
-        //std::cout << "Have to run cuckoo hashing" << std::endl;
+        std::cout << "Have to run cuckoo hashing" << std::endl;
         //std::cout << "Starting to run cuckoo" << ti->buckets_[i1].version.num.load() 
         //      << "," << ti->buckets_[i2].version.num.load() << std::endl;
         size_t insert_bucket = 0;
@@ -1571,18 +1576,23 @@ private:
             return ok;
         }
 
-        assert(st == failure);
-        std::cout << "Hash table is full (hashpower = " << ti->hashpower_ << "with load factor = " << cuckoo_loadfactor(ti) << std::endl;
-        LIBCUCKOO_DBG("hash table is full (hashpower = %zu, hash_items = %zu, load factor = %.2f), need to increase hashpower\n",
+        assert(st == failure || st == failure_key_moved);
+        if (st == failure) {
+            std::cout << "Hash table is full (hashpower = " << ti->hashpower_ << "with load factor = " << cuckoo_loadfactor(ti) << std::endl;
+            LIBCUCKOO_DBG("hash table is full (hashpower = %zu, hash_items = %zu, load factor = %.2f), need to increase hashpower\n",
                       ti->hashpower_, cuckoo_size(ti), cuckoo_loadfactor(ti));
 
-        //we will create a new table and set the new table pointer to it
-        if (cuckoo_expand_start(ti->hashpower_+1) == failure_under_expansion) {
-            std::cout << "Somebody swapped the table pointer before I did. Anyways, it's changed!" << std::endl;
-            return failure_key_moved; //TODO: Change to a different error message?
+            //we will create a new table and set the new table pointer to it
+            if (cuckoo_expand_start(ti->hashpower_+1) == failure_under_expansion) {
+                std::cout << "Somebody swapped the table pointer before I did. Anyways, it's changed!" << std::endl;
+            }
         }
 
-        return failure_key_moved;
+        if (st == failure_key_moved) {
+            std::cout << "No need to try to create new table since found moved bucket" << std::endl;
+        }
+
+        return st;
     }
 
         /* try_read_from-bucket will search the bucket for the given key
