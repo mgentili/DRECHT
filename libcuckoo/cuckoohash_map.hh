@@ -219,8 +219,8 @@ public:
         snapshot_new(ti_new);
         size_t s1 = cuckoo_size(ti_old);
         size_t s2 = cuckoo_size(ti_new);
-        std::cout << "Old table size" << s1 << std::endl;
-        std::cout << "New table size" << s2 << std::endl;
+        // std::cout << "Old table size" << s1 << std::endl;
+        // std::cout << "New table size" << s2 << std::endl;
         unset_hazard_pointer();
         return s1+s2;
     }
@@ -336,19 +336,23 @@ public:
         TableInfo *ti_old, *ti_new;
         size_t i1_o, i2_o, i1_n, i2_n;
         cuckoo_status res;
+
     RETRY:
-        size();
+        //size();
         snapshot_old(ti_old);
-        std::cout << "Starting insert of key" << key << std::endl;
+        // std::cout << "Starting insert of key" << key << std::endl;
         
-        // lock and don't unlock
+        // lock and unlock
         res = insert_one(ti_old, hv, key, val, i1_o, i2_o);
 
         snapshot_new(ti_new); //need to check this to see if expansion in progress
         //std::cout << "In insert with old pointer" << ti_old << "new pointer" << ti_new << std::endl;
         
+        lock_two(ti_old, i1_o, i2_o);
         // expansion in progress, so moving buckets over
+        // this doesn't necessarily need to be done if res != failure_key_moved
         if (ti_new != ti_old && ti_new != nullptr) {
+
             //std::cout << "trying to migrate buckets for insert!" << std::endl;
             //try to move both buckets for now
             //migrate bucket shouldn't ever fail (e.g. need to resize)
@@ -378,18 +382,24 @@ public:
                 std::cout << "ti_new is nullptr in failure_key_moved" << ti_new << std::endl;
                 goto RETRY;
             }
-            assert(ti_new != nullptr);
-            std::cout << "result is failure_key_moved! with new pointer" << ti_new << std::endl;
+            std::cout << "result is failure_key_moved or failure (too full)! with new pointer" << ti_new << std::endl;
             res = insert_one(ti_new, hv, key, val, i1_n, i2_n);
+            // key moved from new table, meaning that an even newer table was created
             if (res == failure_key_moved) {
+                std::cout << "Key already moved from new table...that was fast" << std::endl;
+                unlock_two(ti_old, i1_o, i2_o);
+                unset_hazard_pointer();
+                goto RETRY;
+            }
+            // new table too full to take new insert. In this case, we have to wait until all buckets moved from old table
+            // so that we can create an even larger table. It'll take a while...
+            if (res == failure) {
                 std::cout << "Couldn't insert into new table either?! Hopefully finish moving buckets soon..." << std::endl;
-                unlock_two(ti_new, i1_n, i2_n);
                 unlock_two(ti_old, i1_o, i2_o);
                 unset_hazard_pointer();
                 goto RETRY;
             }
             assert(res == failure_key_duplicated || res == ok);
-            unlock_two(ti_new, i1_n, i2_n); //TODO: When are we unlocking?
         }
         unlock_two(ti_old, i1_o, i2_o); //TODO: When are we unlocking?
         unset_hazard_pointer();
@@ -530,6 +540,8 @@ private:
                 }
             }
             version.num.store(0);
+            need_check_alternate = false;
+            hasmigrated = false;
         }
     };
 
@@ -629,10 +641,8 @@ private:
         //TODO: Don't unlock '
         cuckoo_status res = cuckoo_insert(key, val, hv, ti, i1, i2);
         //std::cout << "We finished an insert loop for key" << key << std::endl;
-        lock_two(ti, i1, i2);
-        //TODO: If unsuccessful because of expansion, make sure that nothing inserted in between
+        
         return res;
-        //return cuckoo_insert(key, val, hv, ti, i1, i2);
     }
 
     cuckoo_status delete_one(TableInfo *ti, size_t hv, const key_type& key,
@@ -656,8 +666,6 @@ private:
         key_type key;
         mapped_type val;
         cuckoo_status res;
-        (void) res;
-        assert(!ti_old->buckets_[old_bucket].hasmigrated);
         for (size_t i = 0; i < SLOT_PER_BUCKET; i++) {
             if (!ti_old->buckets_[old_bucket].occupied[i]) {
                 continue;
@@ -670,10 +678,12 @@ private:
             i2 = alt_index(ti_new, hv, i1);
             //std::cout << "Moving element key: " << key << "val" << val << "to pos" << i1 << "or" << i2 << std::endl;
             lock_two(ti_new, i1, i2);
-            res = cuckoo_insert(key, val, hv, ti_new, i1, i2); // TODO: cuckoo_insert unlocks locks for now
+            res = cuckoo_insert(key, val, hv, ti_new, i1, i2);
             //TODO: What to do if this insert fails?!
+            if (res == failure) {
+                std::cout << "New table too full to accept a key that needs migration :-(" << std::endl;
+            }
             assert(res == ok); // cannot have inserted into new table before
-            //unlock_two(ti_new, i1, i2);
 
             //to keep track of current number of elements in table
             ti_old->num_deletes[counterid].num.fetch_add(1, std::memory_order_relaxed);
@@ -708,7 +718,9 @@ private:
 
         std::cout << "migrate_bucket_range done!" << std::endl;
 
+        // todo: only one guy should be able to call this
         if(count_migrated_buckets(ti_old) == hashsize(ti_old->hashpower_)) {
+            std::cout << "migrate_bucket_range. all buckets moved!" << hashsize(ti_old->hashpower_) << std::endl;
             cuckoo_status res = cuckoo_expand_end();
             if (res != ok) {
                 std::cout << "Someone tried to call cuckoo_expand_end before me" << std::endl;
@@ -716,14 +728,18 @@ private:
                 return;
             }
             migrate_all_lock.unlock();
+            std::cout << "Unlocked migrate_all_lock!" << std::endl;
         }
 
         unset_hazard_pointer();
     }
-
+    /* try_migrate_all checks to see if there are no migration threads already created, and if so
+     * creates threadnum number of threads, each of which will migrate 1/threadnum of the buckets
+     * from the old table to the new table 
+     */
     cuckoo_status try_migrate_all(TableInfo* ti_old, TableInfo* ti_new, size_t threadnum) {
         if(!migrate_all_lock.try_lock()) {
-            //std::cout << "Already migrating all" << std::endl;
+            // std::cout << "Already migrating all" << std::endl;
             return failure_already_migrating_all;
         }
 
@@ -793,10 +809,10 @@ private:
     }
 
     static inline void unlock(const TableInfo *ti, const size_t i) {
-        if ((~ti->buckets_[i].version.num.load() & W) != 0) {
+        /*if ((~ti->buckets_[i].version.num.load() & W) != 0) {
             std::cout << "Using table with size" << ti->hashpower_ << std::endl;
             std::cout << "Starting unlock of" << i << "with version" << ti->buckets_[i].version.num.load() << std::endl;
-        }
+        }*/
         ti->buckets_[i].version.num += W;
         //std::cout << "Ending unlock of" << i << "with version"<< ti->buckets_[i].version.num.load() << "and lock level" << lock_level << std::endl;
     }
@@ -1104,8 +1120,8 @@ private:
             return next != first;
         }
 
-        bool empty() {
-            return first == last;
+        bool not_empty() {
+            return first != last;
         }
     } __attribute__((__packed__));
 
@@ -1121,7 +1137,7 @@ private:
         // the path starts on
         q.enqueue(b_slot(i1, 0, 0));
         q.enqueue(b_slot(i2, 1, 0));
-        while (q.not_full() && !q.empty()) {
+        while (q.not_full() && q.not_empty()) {
             b_slot x = q.dequeue();
             // Picks a random slot to start from
             for (size_t slot = 0; slot < SLOT_PER_BUCKET && q.not_full(); slot++) {
@@ -1375,7 +1391,7 @@ private:
 
         while (true) {
             int depth = cuckoopath_search(ti, cuckoo_path, i1, i2);
-            std::cout << "Depth of cuckoopath_search is" << depth << std::endl;
+            // std::cout << "Depth of cuckoopath_search is" << depth << std::endl;
             if (depth == -1) {
                 return failure; //happens if path too long
             }
@@ -1454,7 +1470,7 @@ private:
         }
 
         // we are unlucky, so let's perform cuckoo hashing
-        std::cout << "Have to run cuckoo hashing" << std::endl;
+        //std::cout << "Have to run cuckoo hashing" << ti->hashpower_ << std::endl;
         //std::cout << "Starting to run cuckoo" << ti->buckets_[i1].version.num.load() 
         //      << "," << ti->buckets_[i2].version.num.load() << std::endl;
         size_t insert_bucket = 0;
@@ -1478,7 +1494,7 @@ private:
 
         assert(st == failure || st == failure_key_moved);
         if (st == failure) {
-            std::cout << "Hash table is full (hashpower = " << ti->hashpower_ << "with load factor = " << cuckoo_loadfactor(ti) << std::endl;
+            std::cout << "Hash table is full (hashpower = " << ti->hashpower_ << "with load factor = " << cuckoo_loadfactor(ti) << ti << std::endl;
             LIBCUCKOO_DBG("hash table is full (hashpower = %zu, hash_items = %zu, load factor = %.2f), need to increase hashpower\n",
                       ti->hashpower_, cuckoo_size(ti), cuckoo_loadfactor(ti));
 
@@ -1486,6 +1502,7 @@ private:
             if (cuckoo_expand_start(ti->hashpower_+1) == failure_under_expansion) {
                 std::cout << "Somebody swapped the table pointer before I did. Anyways, it's changed!" << std::endl;
             }
+
         }
 
         if (st == failure_key_moved) {
@@ -1664,7 +1681,7 @@ private:
      * table. */
     size_t cuckoo_size(const TableInfo *ti) {
         if (ti == nullptr) {
-            std::cout<< "New table doesn't exist yet" << std::endl;
+            //std::cout<< "New table doesn't exist yet" << std::endl;
             return 0;
         }
         size_t inserts = 0;
@@ -1730,6 +1747,10 @@ private:
     cuckoo_status cuckoo_expand_end() {
         TableInfo* old_ti = table_info.load();
         TableInfo* new_ti = new_table_info.load();
+        if (new_ti == nullptr) {
+            std::cout << "New_ti is nullptr in cuckoo_expand_end" << std::endl;
+            return failure_under_expansion;
+        }
         if (!table_info.compare_exchange_weak(old_ti, new_ti, 
                                                     std::memory_order_release,
                                                     std::memory_order_relaxed)) {
