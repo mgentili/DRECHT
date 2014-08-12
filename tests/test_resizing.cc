@@ -49,10 +49,20 @@ public:
 
         std::vector<std::thread> threads;
         size_t keys_per_thread = numkeys / thread_num;
-        for (size_t i = 0; i < thread_num; i++) {
-            threads.emplace_back(insert_thread_with_val<KeyType, ValType>, std::ref(smalltable), keys.begin()+i*keys_per_thread, keys.begin()+(i+1)*keys_per_thread,
-                vals.begin()+i*keys_per_thread, vals.begin()+(i+1)*keys_per_thread);
+        for (size_t i = 0; i < thread_num - 1; i++) {
+            threads.emplace_back(insert_thread_with_val<KeyType, ValType>, 
+                                 std::ref(smalltable), keys.begin()+i*keys_per_thread, 
+                                 keys.begin()+(i+1)*keys_per_thread,
+                                 vals.begin()+i*keys_per_thread, 
+                                 vals.begin()+(i+1)*keys_per_thread);
         }
+
+        threads.emplace_back(insert_thread_with_val<KeyType, ValType>, 
+                                 std::ref(smalltable), keys.begin()+(thread_num-1)*keys_per_thread, 
+                                 keys.begin()+numkeys,
+                                 vals.begin()+(thread_num-1)*keys_per_thread, 
+                                 vals.begin()+numkeys);
+        
         for (size_t i = 0; i < threads.size(); i++) {
             threads[i].join();
         }

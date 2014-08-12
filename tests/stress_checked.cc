@@ -1,4 +1,4 @@
-/* Tests concurrent inserts, deletes, updates, and finds. The test
+/* Tests concurrent inserts, deletes, and finds. The test
  * makes sure that multiple operations are not run on the same key, so
  * that the accuracy of the operations can be verified. */
 
@@ -43,16 +43,13 @@ size_t numkeys;
 size_t power =  22;
 // The number of threads spawned for each type of operation. This can
 // be set with the command line flag --thread-num
-size_t thread_num = 4;
+size_t thread_num = 10;
 // Whether to disable inserts or not. This can be set with the command
 // line flag --disable-inserts
 bool disable_inserts = false;
 // Whether to disable deletes or not. This can be set with the command
 // line flag --disable-deletes
 bool disable_deletes = false;
-// Whether to disable updates or not. This can be set with the command
-// line flag --disable-updates
-bool disable_updates = false;
 // Whether to disable finds or not. This can be set with the command
 // line flag --disable-finds
 bool disable_finds = false;
@@ -67,7 +64,6 @@ bool use_strings = false;
 
 std::atomic<size_t> num_inserts = ATOMIC_VAR_INIT(0);
 std::atomic<size_t> num_deletes = ATOMIC_VAR_INIT(0);
-std::atomic<size_t> num_updates = ATOMIC_VAR_INIT(0);
 std::atomic<size_t> num_finds = ATOMIC_VAR_INIT(0);
 
 template <class KType>
@@ -178,77 +174,6 @@ void delete_thread(AllEnvironment<KType> *env) {
 }
 
 template <class KType>
-void update_thread(AllEnvironment<KType> *env) {
-    std::mt19937_64 gen(env->gen_seed);
-    std::uniform_int_distribution<size_t> third(0, 2);
-    auto updatefn = [](const ValType& v) -> ValType { return v+3; };
-    auto updatefn2 = [](const ValType2& v) -> ValType2 { return v+10; };
-    while (!env->finished.load()) {
-        // Run updates, update_fns, or upserts on a random key, check
-        // that the operations succeeded only if the keys were in the
-        // table (or that they succeeded regardless if it's an
-        // upsert). If successful, check that the keys are indeed in
-        // the table with the new value, and then set in_table to true
-        size_t ind = env->ind_dist(gen);
-        if (!env->in_use[ind].test_and_set()) {
-            KType k = env->keys[ind];
-            ValType v;
-            ValType2 v2;
-            bool res = 0, res2 = 0;
-            //std::cout << "Deleting" << std::endl;
-            switch (third(gen)) {
-            case 0:
-                // update
-                v = env->val_dist(gen);
-                v2 = env->val_dist2(gen);
-                res = env->table.update(k, v);
-                res2 = env->table2.update(k, v2);
-                EXPECT_EQ(res, env->in_table[ind]);
-                EXPECT_EQ(res2, env->in_table[ind]);
-                break;
-            case 1:
-                // update_fn
-                v = updatefn(env->vals[ind]);
-                v2 = updatefn2(env->vals2[ind]);
-                res = env->table.update_fn(k, updatefn);
-                res2 = env->table2.update_fn(k, updatefn2);
-                EXPECT_EQ(res, env->in_table[ind]);
-                EXPECT_EQ(res2, env->in_table[ind]);
-                break;
-            case 2:
-                // upsert
-                if (env->in_table[ind]) {
-                    // Then it should run updatefn
-                    v = updatefn(env->vals[ind]);
-                                v2 = updatefn2(env->vals2[ind]);
-                } else {
-                    // Then it should run an insert
-                    v = env->val_dist(gen);
-                    v2 = env->val_dist2(gen);
-                }
-                res = env->table.upsert(k, updatefn, v);
-                res2 = env->table2.upsert(k, updatefn2, v2);
-                EXPECT_TRUE(res);
-                EXPECT_TRUE(res2);
-                env->in_table[ind] = true;
-            }
-            if (res) {
-                ValType find_v = 0;
-                ValType2 find_v2 = 0;
-                EXPECT_TRUE(env->table.find(k, find_v));
-                EXPECT_EQ(v, find_v);
-                EXPECT_TRUE(env->table2.find(k, find_v2));
-                EXPECT_EQ(v2, find_v2);
-                env->vals[ind] = v;
-                env->vals2[ind] = v2;
-                num_updates.fetch_add(2, std::memory_order_relaxed);
-            }
-            env->in_use[ind].clear();
-        }
-    }
-}
-
-template <class KType>
 void find_thread(AllEnvironment<KType> *env) {
     std::mt19937_64 gen(env->gen_seed);
     while (!env->finished.load()) {
@@ -274,7 +199,7 @@ void find_thread(AllEnvironment<KType> *env) {
     }
 }
 
-// Spawns thread_num insert, delete, update, and find threads
+// Spawns thread_num insert, delete, and find threads
 template <class KType>
 void StressTest(AllEnvironment<KType> *env) {
     std::vector<std::thread> threads;
@@ -284,9 +209,6 @@ void StressTest(AllEnvironment<KType> *env) {
         }
         if (!disable_deletes) {
             threads.emplace_back(delete_thread<KType>, env);
-        }
-        if (!disable_updates) {
-            threads.emplace_back(update_thread<KType>, env);
         }
         if (!disable_finds) {
             threads.emplace_back(find_thread<KType>, env);
@@ -309,7 +231,6 @@ void StressTest(AllEnvironment<KType> *env) {
     std::cout << "----------Results----------" << std::endl;
     std::cout << "Number of inserts:\t" << num_inserts.load() << std::endl;
     std::cout << "Number of deletes:\t" << num_deletes.load() << std::endl;
-    std::cout << "Number of updates:\t" << num_updates.load() << std::endl;
     std::cout << "Number of finds:\t" << num_finds.load() << std::endl;
 }
 
@@ -320,11 +241,10 @@ int main(int argc, char** argv) {
                               "The number of threads to spawn for each type of operation",
                               "The number of seconds to run the test for",
                               "The seed for the random number generator"};
-    const char* flags[] = {"--disable-inserts", "--disable-deletes", "--disable-updates", "--disable-finds", "--use-strings"};
-    bool* flag_vars[] = {&disable_inserts, &disable_deletes, &disable_updates, &disable_finds, &use_strings};
+    const char* flags[] = {"--disable-inserts", "--disable-deletes", "--disable-finds", "--use-strings"};
+    bool* flag_vars[] = {&disable_inserts, &disable_deletes, &disable_finds, &use_strings};
     const char* flag_help[] = {"If set, no inserts will be run",
                                "If set, no deletes will be run",
-                               "If set, no updates will be run",
                                "If set, no finds will be run",
                                "If set, the key type of the map will be std::string"};
     parse_flags(argc, argv, "Runs a stress test on inserts, deletes, and finds",

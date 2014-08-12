@@ -152,6 +152,21 @@ void insert_thread(cuckoohash_map<KType, VType, CityHasher<KType> >& table,
     }
 }
 
+/* An overloaded function that does the inserts for different table
+ * types. Inserts with a value of 0. */
+template <class KType, class VType>
+void insert_thread_with_val(cuckoohash_map<KType, VType, CityHasher<KType> >& table,
+                   typename std::vector<KType>::iterator begin_key,
+                   typename std::vector<KType>::iterator end_key,
+                   typename std::vector<VType>::iterator begin_val,
+                   typename std::vector<VType>::iterator end_val) {
+    for (;begin_key != end_key; begin_key++) {
+        ASSERT_TRUE(table.insert(*begin_key, *begin_val));
+        begin_val++;
+    }
+}
+
+
 /* cacheint is a cache-aligned atomic integer type. */
 struct cacheint {
     std::atomic<size_t> num;

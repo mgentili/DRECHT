@@ -19,7 +19,8 @@ typedef uint32_t KeyType;
 typedef uint32_t ValType;
 typedef std::pair<KeyType, ValType> KVPair;
 
-const size_t power = 19;
+const size_t power = 10;
+//const size_t power = 19;
 const size_t numkeys = (1U << power) * SLOT_PER_BUCKET;
 
 class InsertFindEnvironment {
