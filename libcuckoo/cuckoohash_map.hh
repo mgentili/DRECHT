@@ -354,7 +354,7 @@ public:
 
             if(!has_migrated) {
                 has_migrated = migrate_something(ti_old, ti_new, i1_o, i2_o, num_migrated);
-                assert(has_migrated);
+                //assert(has_migrated);
             }
 
             // LIBCUCKOO_DBG("result is failure_key_moved or failure (too full)! with new pointer");
@@ -412,7 +412,7 @@ public:
 
             if(!has_migrated) {
                 has_migrated = migrate_something(ti_old, ti_new, i1_o, i2_o, num_migrated);
-                assert(has_migrated);
+                //assert(has_migrated);
             }
 
             res = delete_one(ti_new, hv, key, i1_n, i2_n);
@@ -571,7 +571,6 @@ private:
                             const mapped_type& val, size_t& i1, size_t& i2) {
         i1 = index_hash(ti, hv);
         i2 = alt_index(ti, hv, i1);
-        //std::cout << "In insert loop for key" << key << std::endl;
         lock_two(ti, i1, i2);
 
         cuckoo_status res = cuckoo_insert(key, val, hv, ti, i1, i2);
@@ -617,6 +616,7 @@ private:
     /* Tries to migrate the two buckets that an attempted insert could go to. 
      * If the number of migrated buckets is sufficiently high, it triggers creation of
      * new threads that will try to finish migrating the rest of the buckets
+     * TODO: Can optimistically check and lock only if necessary
      */
     bool migrate_something(TableInfo *ti_old, TableInfo *ti_new, 
                                size_t i1_o, size_t i2_o, size_t& num_migrated) {
@@ -1693,7 +1693,6 @@ private:
             delete ti;
             return failure_under_expansion;
         }
-
         return ok;
     }
 
