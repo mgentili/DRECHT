@@ -328,7 +328,7 @@ public:
                 goto RETRY;
             res = failure_key_moved; 
         } else {
-            res = insert_one(ti_old, hv, key, val, i1_o, i2_o);
+            res = insert_one_old(ti_old, hv, key, val, i1_o, i2_o);
         }
 
         // This is triggered only if we couldn't find the key in either
@@ -351,7 +351,7 @@ public:
             }
 
             // LIBCUCKOO_DBG("result is failure_key_moved or failure (too full)! with new pointer");
-            res = insert_one(ti_new, hv, key, val, i1_n, i2_n);
+            res = insert_one_old(ti_new, hv, key, val, i1_n, i2_n);
             
             // key moved from new table, meaning that an even newer table was created
             if (res == failure_key_moved) {
@@ -361,11 +361,13 @@ public:
             }
 
             // Impossible case because of invariant with migrations
-            /*if (res == failure) {
-                LIBCUCKOO_DBG("Couldn't insert into new table either?! Hopefully finish moving buckets soon...");
-                unset_hazard_pointer();
-                goto RETRY;
-            }*/
+            if (res == failure) {
+                LIBCUCKOO_DBG("hashpower = %zu, %zu, hash_items = %zu,%zu, load factor = %.2f,%.2f), need to increase hashpower\n",
+                      ti_old->hashpower_, ti_new->hashpower_, cuckoo_size(ti_old), cuckoo_size(ti_new),
+                      cuckoo_loadfactor(ti_old), cuckoo_loadfactor(ti_new) );
+                exit(1);
+            }
+
             assert(res == failure_key_duplicated || res == ok);
         }
         unset_hazard_pointer();
@@ -394,7 +396,7 @@ public:
                 goto RETRY;
             res = failure_key_moved;
         } else {
-            res = delete_one(ti_old, hv, key, i1_o, i2_o);
+            res = delete_one_old(ti_old, hv, key, i1_o, i2_o);
         }
         
         if (res == failure_key_moved) {
@@ -411,7 +413,7 @@ public:
                     goto RETRY;
             }
 
-            res = delete_one(ti_new, hv, key, i1_n, i2_n);
+            res = delete_one_old(ti_new, hv, key, i1_n, i2_n);
             assert(res == ok || res == failure_key_not_found);
         }
         unset_hazard_pointer();
@@ -649,7 +651,6 @@ private:
             if (cuckoo_expand_start(ti, ti->hashpower_+1) == failure_under_expansion) {
                 LIBCUCKOO_DBG("Somebody swapped the table pointer before I did. Anyways, it's changed!\n");
             }
-
         }
 
         /*if (st == failure_key_moved) {
@@ -675,6 +676,41 @@ private:
      * Regardless, it starts with the buckets unlocked and ends with buckets locked 
      */
     cuckoo_status delete_one(TableInfo *ti, size_t hv, const key_type& key,
+                             size_t& i1, size_t& i2) {
+        i1 = index_hash(ti, hv);
+        i2 = alt_index(ti, hv, i1);
+        cuckoo_status res1, res2;
+        
+        lock( ti, i1 );
+
+        res1 = try_del_from_bucket(ti, key, i1);
+        // if we found the element there, or nothing ever was added to second bucket, then we're done
+        if (res1 == ok || res1 == failure_key_moved || !ti->buckets_[i1].need_check_alternate) {
+            unlock( ti, i1 );
+            return res1;
+        } else {
+            if( !try_lock(ti, i1) ) {
+                unlock(ti, i1);
+                lock_two(ti, i1, i2);
+                res1 = try_del_from_bucket(ti, key, i1);
+                if(res1 == ok || res1 == failure_key_moved) {
+                    unlock_two(ti, i1, i2);
+                    return res1;
+                }
+            }
+        }
+
+        res2 = try_del_from_bucket(ti, key, i2);
+        if (res2 == ok || res2 == failure_key_moved) {
+            unlock_two(ti, i1, i2);
+            return res2;
+        }
+
+        unlock_two(ti, i1, i2);
+        return failure_key_not_found;
+    }
+
+    cuckoo_status delete_one_old(TableInfo *ti, size_t hv, const key_type& key,
                              size_t& i1, size_t& i2) {
         i1 = index_hash(ti, hv);
         i2 = alt_index(ti, hv, i1);
@@ -758,9 +794,12 @@ private:
 
             res = insert_one(ti_new, hv, key, val, i1, i2);
 
-            //LIBCUCKOO_DBG("Moving element with hv %zu to pos %zu or %zu\n", hv, i1, i2);
-
-            assert(res == ok); // cannot have inserted into new table before
+            if( res != ok ) {
+                LIBCUCKOO_DBG("hashpower = %zu, %zu, hash_items = %zu,%zu, load factor = %.2f,%.2f), need to increase hashpower\n",
+                      ti_old->hashpower_, ti_new->hashpower_, cuckoo_size(ti_old), cuckoo_size(ti_new),
+                      cuckoo_loadfactor(ti_old), cuckoo_loadfactor(ti_new) );
+                exit(1);
+            }
 
             //to keep track of current number of elements in table
             ti_old->num_deletes[counterid].num.fetch_add(1, std::memory_order_relaxed);
