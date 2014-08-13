@@ -562,10 +562,107 @@ private:
     /* insert_one tries to insert a key-value pair into a specific table instance.
      * It will return a failure if the key is already in the table, we've started an expansion,
      * or a bucket was moved.
-     * Regardless, it starts with the buckets unlocked and ends with buckets locked 
+     * Regardless, it starts with the buckets unlocked and ends with buckets unlocked 
      */
     cuckoo_status insert_one(TableInfo *ti, size_t hv, const key_type& key,
                             const mapped_type& val, size_t& i1, size_t& i2) {
+        int open1, open2;
+        cuckoo_status res1, res2;
+
+        //fastpath: 
+        lock( ti, i1 );
+        res1 = try_add_to_bucket(ti, key, val, i1, open1);
+        if (res1 == failure_key_duplicated || res1 == failure_key_moved) {
+            unlock( ti, i1 );
+            return res1;
+        } else {
+            assert( res1 == ok ); 
+            // if nothing's ever been moved out of this bucket and there's an open space,
+            // we can directly add it in
+            if( !ti->buckets_[i1].need_check_alternate && open1 != -1 ) {
+                add_to_bucket(ti, key, val, i1, open1);
+                unlock( ti, i1 );
+                return ok;
+            } else { //we need to try and get the second lock
+                if( !try_lock(ti, i2) ) {
+                    unlock(ti, i1);
+                    lock_two(ti, i1, i2);
+                    // we need to make sure nothing happened to the first bucket while it was unlocked
+                    res1 = try_add_to_bucket(ti, key, val, i1, open1);
+                    if (res1 == failure_key_duplicated || res1 == failure_key_moved) {
+                        unlock_two(ti, i1, i2);
+                        return res1;
+                    }
+                }
+            }
+        }
+
+        //at this point we must have both buckets locked
+        res2 = try_add_to_bucket(ti, key, val, i2, open2);
+        if (res2 == failure_key_duplicated || res2 == failure_key_moved) {
+            unlock_two(ti, i1, i2);
+            return res2;
+        }
+
+        if (open1 != -1) {
+            add_to_bucket(ti, key, val, i1, open1);
+            unlock_two(ti, i1, i2);
+            return ok;
+        }
+        ti->buckets_[i1].need_check_alternate = true;
+
+        if (open2 != -1) {
+            add_to_bucket(ti, key, val, i2, open2);
+            unlock_two(ti, i1, i2);
+            return ok;
+        }
+
+        // we are unlucky, so let's perform cuckoo hashing
+        //std::cout << "Starting to run cuckoo" << ti->buckets_[i1].version.num.load() 
+        //      << "," << ti->buckets_[i2].version.num.load() << std::endl;
+        size_t insert_bucket = 0;
+        size_t insert_slot = 0;
+        mapped_type oldval;
+        cuckoo_status st = run_cuckoo(ti, i1, i2, insert_bucket, insert_slot);
+        if (st == ok) {
+            assert(!ti->buckets_[insert_bucket].occupied[insert_slot]);
+            assert(insert_bucket == index_hash(ti, hv) || insert_bucket == alt_index(ti, hv, index_hash(ti, hv)));
+            /* Since we unlocked the buckets during run_cuckoo,
+             * another insert could have inserted the same key into
+             * either i1 or i2, so we check for that before doing the
+             * insert. */
+            if (cuckoo_find(key, oldval, hv, ti, i1, i2) == ok) {
+                unlock_two(ti, i1, i2);
+                return failure_key_duplicated;
+            }
+            add_to_bucket(ti, key, val, insert_bucket, insert_slot);
+            unlock_two(ti, i1, i2);
+            return ok;
+        }
+
+        assert(st == failure || st == failure_key_moved);
+        if (st == failure) {
+            LIBCUCKOO_DBG("hash table is full (hashpower = %zu, hash_items = %zu, load factor = %.2f), need to increase hashpower\n",
+                      ti->hashpower_, cuckoo_size(ti), cuckoo_loadfactor(ti));
+
+            //we will create a new table and set the new table pointer to it
+            if (cuckoo_expand_start(ti, ti->hashpower_+1) == failure_under_expansion) {
+                LIBCUCKOO_DBG("Somebody swapped the table pointer before I did. Anyways, it's changed!\n");
+            }
+
+        }
+
+        /*if (st == failure_key_moved) {
+            LIBCUCKOO_DBG("No need to try to create new table since found moved bucket\n");
+        }*/
+
+        return st;
+    }
+
+    cuckoo_status insert_one_old(TableInfo *ti, size_t hv, const key_type& key,
+                            const mapped_type& val, size_t& i1, size_t& i2) {
+        
+
         lock_two(ti, i1, i2);
 
         cuckoo_status res = cuckoo_insert(key, val, hv, ti, i1, i2);
@@ -573,7 +670,6 @@ private:
         
         return res;
     }
-
     /* delete_one tries to delete a key-value pair into a specific table instance.
      * It will return a failure only if the key wasn't found or a bucket was moved.
      * Regardless, it starts with the buckets unlocked and ends with buckets locked 
