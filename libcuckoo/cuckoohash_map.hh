@@ -201,14 +201,6 @@ public:
         unset_hazard_pointer();
     }
 
-    void force_migration() {
-        check_hazard_pointer();
-        TableInfo *ti_old, *ti_new;
-        snapshot_old(ti_old);
-        snapshot_new(ti_new);
-        try_migrate_all(ti_old, ti_new, 1);
-    }
-
     /*! size returns the number of items currently in the hash table.
      * Since it doesn't lock the table, elements can be inserted
      * during the computation, so the result may not necessarily be
@@ -216,8 +208,8 @@ public:
     size_t size() {
         check_hazard_pointer();
         TableInfo *ti_old, *ti_new;
-        snapshot_old(ti_old);
-        snapshot_new(ti_new);
+        ti_old = snapshot_table_old_nolock();
+        ti_new = snapshot_table_new_nolock();
         size_t s1 = cuckoo_size(ti_old);
         size_t s2 = cuckoo_size(ti_new);
         LIBCUCKOO_DBG("Old table size %zu\n", s1);
@@ -233,15 +225,14 @@ public:
 
     /* undergoing_expansion returns true if there are currently two tables in use */
     bool undergoing_expansion() {
-        TableInfo* ti_new;
-        snapshot_new(ti_new);
+        TableInfo* ti_new = snapshot_table_new_nolock();
         return (ti_new == nullptr);
     }
     /*! hashpower returns the hashpower of the table, which is log<SUB>2</SUB>(the
      * number of buckets). */
     size_t hashpower() {
         check_hazard_pointer();
-        TableInfo* ti = snapshot_table_nolock();
+        TableInfo* ti = snapshot_table_old_nolock();
         const size_t hashpower = ti->hashpower_;
         unset_hazard_pointer();
         return hashpower;
@@ -250,7 +241,7 @@ public:
     /*! bucket_count returns the number of buckets in the table. */
     size_t bucket_count() {
         check_hazard_pointer();
-        TableInfo *ti = snapshot_table_nolock();
+        TableInfo *ti = snapshot_table_old_nolock();
         size_t buckets = hashsize(ti->hashpower_);
         unset_hazard_pointer();
         return buckets;
@@ -260,7 +251,7 @@ public:
      * table to the total number of available slots in the table. */
     float load_factor() {
         check_hazard_pointer();
-        const TableInfo *ti = snapshot_table_nolock();
+        const TableInfo *ti = snapshot_table_old_nolock();
         const float lf = cuckoo_loadfactor(ti);
         unset_hazard_pointer();
         return lf;
@@ -271,24 +262,24 @@ public:
     bool find(const key_type& key, mapped_type& val) {
         check_hazard_pointer();
         size_t hv = hashed_key(key);
-        
+        size_t i1, i2;
         TableInfo *ti_old, *ti_new;
         cuckoo_status res;
     RETRY:
-        snapshot_old(ti_old);
+        snapshot_old(ti_old, hv, i1, i2);
 
-        res = find_one(ti_old, hv, key, val);
+        res = find_one(ti_old, hv, key, val, i1, i2);
 
         // couldn't find key in bucket, and one of the buckets was moved to new table
         if (res == failure_key_moved) {
-            snapshot_new(ti_new);
+            snapshot_new(ti_new, hv, i1, i2);
 
             if (ti_new == nullptr) { // the new table's pointer has already moved
                 unset_hazard_pointer();
                 LIBCUCKOO_DBG("ti_new is nullptr in failure_key_moved with ptr %p\n",ti_new);
                 goto RETRY;
             }
-            res = find_one(ti_new, hv, key, val);
+            res = find_one(ti_new, hv, key, val, i1, i2);
             assert(res == ok || res == failure_key_not_found);
         }
 
@@ -324,27 +315,27 @@ public:
         TableInfo *ti_old, *ti_new;
         size_t i1_o, i2_o, i1_n, i2_n; //bucket indices for old+new tables
         cuckoo_status res;
-        bool has_migrated = false;
-        size_t num_migrated = 0;
-
+        bool tried_migrating = false;
+        bool finished_migrating = false;
     RETRY:
-        snapshot_old(ti_old);
-        snapshot_new(ti_new); //need to check this to see if expansion in progress
+        snapshot_old(ti_old, hv, i1_o, i2_o);
+        snapshot_new(ti_new, hv, i1_n, i2_n); //need to check this to see if expansion in progress
 
-        //LIBCUCKOO_DBG("Starting insert of key with hv %zu\n", hv);
-        
-        // lock and unlock
-        res = insert_one(ti_old, hv, key, val, i1_o, i2_o);
-        
+        // if two tables exist, then no point in inserting into old one
         if (ti_new != ti_old && ti_new != nullptr) {
-            has_migrated = migrate_something(ti_old, ti_new, i1_o, i2_o, num_migrated);
+            tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o, finished_migrating );
+            if( finished_migrating )
+                goto RETRY;
+            res = failure_key_moved; 
+        } else {
+            res = insert_one(ti_old, hv, key, val, i1_o, i2_o);
         }
 
         // This is triggered only if we couldn't find the key in either
         // old table bucket and one of the buckets was moved
         // or this thread expanded the table (so didn't insert into key into new table yet)
         if (res == failure_key_moved || res == failure) {
-            snapshot_new(ti_new);
+            snapshot_new(ti_new, hv, i1_n, i2_n);
             // all buckets have already been moved, and now old_table_ptr has the new one
             if (ti_new == nullptr || ti_old == ti_new) {
                 unset_hazard_pointer();
@@ -352,9 +343,11 @@ public:
                 goto RETRY;
             }
 
-            if(!has_migrated) {
-                has_migrated = migrate_something(ti_old, ti_new, i1_o, i2_o, num_migrated);
-                //assert(has_migrated);
+            //need to ensure that we always attempt a migration if both tables exist
+            if(!tried_migrating) {
+                tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o, finished_migrating );
+                if( finished_migrating )
+                    goto RETRY;
             }
 
             // LIBCUCKOO_DBG("result is failure_key_moved or failure (too full)! with new pointer");
@@ -366,13 +359,13 @@ public:
                 unset_hazard_pointer();
                 goto RETRY;
             }
-            // new table too full to take new insert. In this case, we have to wait until all buckets moved from old table
-            // so that we can create an even larger table. Shouldn't ever happen
-            if (res == failure) {
+
+            // Impossible case because of invariant with migrations
+            /*if (res == failure) {
                 LIBCUCKOO_DBG("Couldn't insert into new table either?! Hopefully finish moving buckets soon...");
                 unset_hazard_pointer();
                 goto RETRY;
-            }
+            }*/
             assert(res == failure_key_duplicated || res == ok);
         }
         unset_hazard_pointer();
@@ -389,30 +382,33 @@ public:
         TableInfo *ti_old, *ti_new;
         size_t i1_o, i2_o, i1_n, i2_n;
         cuckoo_status res;
-        bool has_migrated = false;
-        size_t num_migrated = 0;
+        bool tried_migrating = false;
+        bool finished_migrating = false;
     RETRY:
-        snapshot_old(ti_old);
-        snapshot_new(ti_new);
-
-        //lock and unlock
-        res = delete_one(ti_old, hv, key, i1_o, i2_o);
+        snapshot_old(ti_old, hv, i1_o, i2_o);
+        snapshot_new(ti_new, hv, i1_n, i2_n);
 
         if (ti_new != ti_old && ti_new != nullptr) {
-            has_migrated = migrate_something(ti_old, ti_new, i1_o, i2_o, num_migrated);
+            tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o, finished_migrating);
+            if( finished_migrating) 
+                goto RETRY;
+            res = failure_key_moved;
+        } else {
+            res = delete_one(ti_old, hv, key, i1_o, i2_o);
         }
-
+        
         if (res == failure_key_moved) {
-            snapshot_new(ti_new);
+            snapshot_new(ti_new, hv, i1_n, i2_n);
             if (ti_new == nullptr) { // all buckets were moved, and tables swapped
                 unset_hazard_pointer();
                 LIBCUCKOO_DBG("ti_new is nullptr in failure_key_moved");
                 goto RETRY;
             }
 
-            if(!has_migrated) {
-                has_migrated = migrate_something(ti_old, ti_new, i1_o, i2_o, num_migrated);
-                //assert(has_migrated);
+            if(!tried_migrating) {
+                tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o, finished_migrating);
+                if( finished_migrating) 
+                    goto RETRY;
             }
 
             res = delete_one(ti_new, hv, key, i1_n, i2_n);
@@ -497,7 +493,9 @@ private:
         std::vector<cacheint> num_inserts;
         std::vector<cacheint> num_deletes;
         std::vector<cacheint> num_migrated_buckets;
-        std::vector<cacheint> migrate_bucket_ind;
+
+        // counter for the position of the next bucket to try and migrate
+        cacheint migrate_bucket_ind;
 
         /* The constructor allocates the memory for the table. For
          * buckets, it uses the bucket_allocator, so that we can free
@@ -515,7 +513,7 @@ private:
                 num_inserts.resize(kNumCores);
                 num_deletes.resize(kNumCores);
                 num_migrated_buckets.resize(kNumCores);
-                migrate_bucket_ind.resize(kNumCores);
+                migrate_bucket_ind.num.store(0);
             } catch (const std::bad_alloc&) {
                 if (buckets_ != nullptr) {
                     bucket_allocator.deallocate(buckets_, hashsize(hashpower_));
@@ -548,11 +546,10 @@ private:
 
     /* find_one searches a specific table instance for the value corresponding to a given hash value 
      * It doesn't take any locks */
-    cuckoo_status find_one(const TableInfo *ti, size_t hv, const key_type& key, mapped_type& val) {
-        size_t i1, i2, v1_i, v2_i, v1_f, v2_f;
+    cuckoo_status find_one(const TableInfo *ti, size_t hv, const key_type& key, mapped_type& val,
+                            size_t& i1, size_t& i2) {
+        size_t v1_i, v2_i, v1_f, v2_f;
         cuckoo_status st;
-        i1 = index_hash(ti, hv);
-        i2 = alt_index(ti, hv, i1);
         do {
             get_version_two(ti, i1, i2, v1_i, v2_i);
             st = cuckoo_find(key, val, hv, ti, i1, i2);
@@ -569,8 +566,6 @@ private:
      */
     cuckoo_status insert_one(TableInfo *ti, size_t hv, const key_type& key,
                             const mapped_type& val, size_t& i1, size_t& i2) {
-        i1 = index_hash(ti, hv);
-        i2 = alt_index(ti, hv, i1);
         lock_two(ti, i1, i2);
 
         cuckoo_status res = cuckoo_insert(key, val, hv, ti, i1, i2);
@@ -613,68 +608,33 @@ private:
 
     }
 
-    /* Tries to migrate the two buckets that an attempted insert could go to. 
-     * If the number of migrated buckets is sufficiently high, it triggers creation of
-     * new threads that will try to finish migrating the rest of the buckets
+    /* Tries to migrate the two buckets that an attempted insert could go to.
+     * Also ensures trying to migrate a new bucket. This invariant ensures that we never
+     * fill up the new table before the old table has finished migrating.
      * TODO: Can optimistically check and lock only if necessary
      */
     bool migrate_something(TableInfo *ti_old, TableInfo *ti_new, 
-                               size_t i1_o, size_t i2_o, size_t& num_migrated) {
+                               size_t i1_o, size_t i2_o, bool& finished_migrating) {
         assert(ti_old != ti_new);
 
-        //LIBCUCKOO_DBG("We're migrating buckets in migrate_something!\n");
         lock(ti_old, i1_o);
-        if(try_migrate_bucket(ti_old, ti_new, i1_o)) {
-            num_migrated++;
-        }
+        try_migrate_bucket(ti_old, ti_new, i1_o);
         unlock(ti_old, i1_o);
 
         lock(ti_old, i2_o);
-        if(try_migrate_bucket(ti_old, ti_new, i2_o)) {
-            num_migrated++;
-        }
+        try_migrate_bucket(ti_old, ti_new, i2_o);
         unlock(ti_old, i2_o);
+
+        size_t new_migrate_bucket = ti_old->migrate_bucket_ind.num.fetch_add(1, std::memory_order_relaxed);
         
-        if(num_migrated == 0) {
-            //LIBCUCKOO_DBG("Need to migrated a bucket in migrate_something\n");
-            size_t num_buckets = hashsize(ti_old->hashpower_);
-            size_t core_start_index = counterid*num_buckets/kNumCores;
-            size_t index_to_migrate = ti_old->migrate_bucket_ind[counterid].num.load();
-            bool succeeded = false;
-            do {
-                lock(ti_old, index_to_migrate);
-                succeeded = try_migrate_bucket(ti_old, ti_new, index_to_migrate);
-                unlock(ti_old, index_to_migrate);
-                index_to_migrate = (index_to_migrate + 1) % num_buckets;
-                
-            } while(index_to_migrate != core_start_index && !succeeded);
-
-            if(succeeded) {
-                //LIBCUCKOO_DBG("Successfully migrated bucket %zu out of %zu\n", index_to_migrate - 1, num_buckets);
-                ti_old->migrate_bucket_ind[counterid].num.store(index_to_migrate);
-                num_migrated++;
-            }
-
-            if(index_to_migrate == core_start_index) {
-                // LIBCUCKOO_DBG("Finished migrating all buckets\n");    
-                cuckoo_status res = cuckoo_expand_end(ti_old);
-                if (res != ok) {
-                    LIBCUCKOO_DBG("Someone tried to call cuckoo_expand_end before me");
-                }
-            }
+        if( new_migrate_bucket >= hashsize(ti_old->hashpower_) ) {
+            cuckoo_expand_end(ti_old);
+            finished_migrating = true;
+        } else {
+            lock(ti_old, new_migrate_bucket);
+            try_migrate_bucket(ti_old, ti_new, new_migrate_bucket);
+            unlock(ti_old, new_migrate_bucket);
         }
-
-        // LIBCUCKOO_DBG("Successfully migrated %zu buckets\n", num_migrated);
-        // size();
-
-        //if sufficient number of buckets moved, start a thread that starts from beginning of table to end
-        //trying to move each bucket
-        //TODO: Check local version first
-        // if (double(count_migrated_buckets(ti_old))/hashsize(ti_old->hashpower_) > MIGRATE_THRESHOLD) {
-        //     LIBCUCKOO_DBG("Percent moved buckets is %0.2f", double(count_migrated_buckets(ti_old))/hashsize(ti_old->hashpower_));    
-        //     try_migrate_all(ti_old, ti_new, 1);
-        // }
-
         return true;
     }
 
@@ -697,6 +657,9 @@ private:
             val = ti_old->buckets_[old_bucket].vals[i];
 
             hv = hashed_key(key);
+            i1 = index_hash(ti_new, hv);
+            i2 = alt_index(ti_new, hv, i1);
+
             res = insert_one(ti_new, hv, key, val, i1, i2);
 
             //LIBCUCKOO_DBG("Moving element with hv %zu to pos %zu or %zu\n", hv, i1, i2);
@@ -708,81 +671,8 @@ private:
         }
 
         ti_old->buckets_[old_bucket].hasmigrated = true;
-        ti_old->num_migrated_buckets[counterid].num.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
-
-    // void migrate_bucket_range(TableInfo* ti_old, TableInfo* ti_new, size_t begin, size_t end) {
-    //     check_hazard_pointer();
-    //     check_counterid();
-    //     TableInfo *ti_old_now;
-    //     snapshot_old(ti_old_now);
-
-    //     // TableInfo pointer has swapped already, meaning that all buckets already migrated
-    //     if (ti_old_now != ti_old) {
-    //         LIBCUCKOO_DBG("TableInfo ptr swapped in migrate_bucket_range");
-    //         unset_hazard_pointer();
-    //         return;
-    //     }
-
-    //     for (size_t i = begin; i < end; i++) {
-    //         lock(ti_old, i);
-    //         LIBCUCKOO_DBG("In migrate_bucket_range. Trying to migrate bucket %zu", i);
-    //         try_migrate_bucket(ti_old, ti_new, i);
-    //         unlock(ti_old, i);
-    //     }
-
-    //     LIBCUCKOO_DBG("migrate_bucket_range. Num migrated buckets! %zu", count_migrated_buckets(ti_old));
-
-    //     // todo: only one guy should be able to call this
-    //     if(count_migrated_buckets(ti_old) == hashsize(ti_old->hashpower_)) {
-    //         LIBCUCKOO_DBG("migrate_bucket_range. all buckets moved! %zu", hashsize(ti_old->hashpower_));
-    //         cuckoo_status res = cuckoo_expand_end(ti_old);
-    //         if (res != ok) {
-    //             LIBCUCKOO_DBG("Someone tried to call cuckoo_expand_end before me");
-    //             unset_hazard_pointer();
-    //             return;
-    //         }
-    //         migrate_all_lock.unlock();
-    //         LIBCUCKOO_DBG("Unlocked migrate_all_lock!");
-    //     }
-
-    //     unset_hazard_pointer();
-    // }
-
-    /* try_migrate_all checks to see if there are no migration threads already created, and if so
-     * creates threadnum number of threads, each of which will migrate 1/threadnum of the buckets
-     * from the old table to the new table 
-     */
-     //TODO. We can get a situation where 
-    // cuckoo_status try_migrate_all(TableInfo* ti_old, TableInfo* ti_new, size_t threadnum) {
-    //     if(!migrate_all_lock.try_lock()) {
-    //         LIBCUCKOO_DBG("Already migrating all");
-    //         return failure_already_migrating_all;
-    //     }
-
-    //     LIBCUCKOO_DBG("Successfully locked migrate_all_lock");
-    //     if (ti_new == table_info.load()) {
-    //         LIBCUCKOO_DBG("Already swapped new table in!");
-    //         migrate_all_lock.unlock();
-    //     }
-    //     const size_t buckets_per_thread = hashsize(ti_old->hashpower_) / threadnum;
-    //     std::vector<std::thread> migrate_threads(threadnum);
-    //     for (size_t i = 0; i < threadnum-1; i++) {
-    //         migrate_threads[i] = std::thread( &cuckoohash_map<Key, T, Hash>::migrate_bucket_range,
-    //             this, ti_old, ti_new, 
-    //             i*buckets_per_thread, (i+1)*buckets_per_thread);
-    //     }
-    //     // remaining buckets
-    //     migrate_threads[threadnum-1] = std::thread(&cuckoohash_map<Key, T, Hash>::migrate_bucket_range,
-    //         this, ti_old, ti_new, 
-    //         (threadnum-1)*buckets_per_thread, hashsize(ti_old->hashpower_));
-
-    //     for (size_t i = 0; i < threadnum; i++) {
-    //         migrate_threads[i].detach();
-    //     }
-    //     return ok;
-    // }
 
     /* get_version gets the version for a given bucket index */
     static inline void get_version(const TableInfo *ti, const size_t i, size_t& v) {
@@ -923,18 +813,24 @@ private:
         }
     }
 
-    void snapshot_old(TableInfo*& ti) {
+    void snapshot_old(TableInfo*& ti, size_t hv, size_t& i1, size_t& i2) {
     TryAcquire:
         ti = table_info.load();
         *hazard_pointer = static_cast<void*>(ti); //to keep track of which tables are currently in use
+        i1 = index_hash(ti, hv);
+        i2 = alt_index(ti, hv, i1);
         if (ti != table_info.load()) {
             goto TryAcquire;
         }
     }
 
     // don't need to because it can never be garbage collected before it becomes an "old" table pointer 
-    void snapshot_new(TableInfo*& ti) {
+    void snapshot_new(TableInfo*& ti, size_t hv, size_t& i1, size_t& i2) {
         ti = new_table_info.load();
+        if( ti == nullptr ) return;
+
+        i1 = index_hash(ti, hv);
+        i2 = alt_index(ti, hv, i1);
     }
 
     /* snapshot_and_lock_all increases the version of every counter to 1mod2
@@ -971,7 +867,7 @@ private:
      * equals the address of a previously deleted one, however it
      * doesn't matter, since we would still be looking at the most
      * recent table_info in that case. */
-    TableInfo* snapshot_table_nolock() {
+    TableInfo* snapshot_table_old_nolock() {
         TableInfo *ti;
     TryAcquire:
         ti = table_info.load();
@@ -980,6 +876,11 @@ private:
             std::cout << "Table info changed!" << std::endl;
             goto TryAcquire;
         }
+        return ti;
+    }
+
+    TableInfo* snapshot_table_new_nolock() {
+        TableInfo *ti = new_table_info.load();;
         return ti;
     }
 
@@ -1396,11 +1297,11 @@ private:
             }
 
             if (res == failure_key_moved) {
-                std::cout << "Found moved bucket when running cuckoopath_move" << std::endl;
+                LIBCUCKOO_DBG("Found moved bucket when running cuckoopath_move");
                 return failure_key_moved;
             }
         }
-        std::cout << "Should never reach here" << std::endl;
+        LIBCUCKOO_DBG("Should never reach here");
         return failure;
     }
 
@@ -1486,9 +1387,9 @@ private:
 
         }
 
-        if (st == failure_key_moved) {
+        /*if (st == failure_key_moved) {
             LIBCUCKOO_DBG("No need to try to create new table since found moved bucket\n");
-        }
+        }*/
 
         return st;
     }
@@ -1620,13 +1521,13 @@ private:
 
     /* count_migrated_buckets returns the number of migrated buckets in the given
      * table. */
-    size_t count_migrated_buckets(const TableInfo *ti) {
+    /*size_t count_migrated_buckets(const TableInfo *ti) {
         size_t num_migrated = 0;
         for (size_t i = 0; i < ti->num_inserts.size(); i++) {
             num_migrated += ti->num_migrated_buckets[i].num.load();
         }
         return num_migrated;
-    }
+    }*/
 
     /* cuckoo_clear empties the table, calling the destructors of all
      * the elements it removes from the table. It assumes the locks
@@ -1636,13 +1537,10 @@ private:
             ti->buckets_[i].clear();
         }
 
-        size_t buckets_per_core = hashsize(ti->hashpower_)/kNumCores;
-
         for (size_t i = 0; i < ti->num_inserts.size(); i++) {
             ti->num_inserts[i].num.store(0);
             ti->num_deletes[i].num.store(0);
-            ti->num_migrated_buckets[i].num.store(0);
-            ti->migrate_bucket_ind[i].num.store(i*buckets_per_core);
+            ti->migrate_bucket_ind.num.store(0);
         }
         return ok;
     }
