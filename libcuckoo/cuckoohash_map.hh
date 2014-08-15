@@ -371,17 +371,12 @@ public:
         size_t i1_o, i2_o, i1_n, i2_n; //bucket indices for old+new tables
         cuckoo_status res;
         bool tried_migrating = false;
-        bool finished_migrating = false;
     RETRY:
         snapshot_both_get_buckets(ti_old, ti_new, hv, i1_o, i2_o, i1_n, i2_n);
 
         // if two tables exist, then no point in inserting into old one
         if (ti_new != nullptr) {
-            tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o, finished_migrating );
-            if( finished_migrating ) {
-                unset_hazard_pointers();
-                goto RETRY;
-            }
+            tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o );
             res = failure_key_moved; 
         } else {
             res = insert_one(ti_old, hv, key, val, i1_o, i2_o);
@@ -400,11 +395,7 @@ public:
 
             //need to ensure that we always attempt a migration if both tables exist
             if(!tried_migrating) {
-                tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o, finished_migrating );
-                if( finished_migrating ) {
-                    unset_hazard_pointers();
-                    goto RETRY;
-                }
+                tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o );
             }
 
             // LIBCUCKOO_DBG("result is failure_key_moved or failure (too full)! with new pointer");
@@ -445,16 +436,11 @@ public:
         size_t i1_o, i2_o, i1_n, i2_n;
         cuckoo_status res;
         bool tried_migrating = false;
-        bool finished_migrating = false;
     RETRY:
         snapshot_both_get_buckets(ti_old, ti_new, hv, i1_o, i2_o, i1_n, i2_n);
 
         if (ti_new != nullptr) {
-            tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o, finished_migrating);
-            if( finished_migrating ) {
-                unset_hazard_pointers();
-                goto RETRY;
-            }
+            tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o);
             res = failure_key_moved;
         } else {
             res = delete_one(ti_old, hv, key, i1_o, i2_o);
@@ -468,11 +454,7 @@ public:
             }
 
             if(!tried_migrating) {
-                tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o, finished_migrating);
-                if( finished_migrating ) {
-                    unset_hazard_pointers();
-                    goto RETRY;
-                }
+                tried_migrating = migrate_something(ti_old, ti_new, i1_o, i2_o);
             }
 
             res = delete_one(ti_new, hv, key, i1_n, i2_n);
@@ -813,7 +795,7 @@ private:
      * fill up the new table before the old table has finished migrating.
      */
     bool migrate_something(TableInfo *ti_old, TableInfo *ti_new, 
-                               size_t i1_o, size_t i2_o, bool& finished_migrating) {
+                               size_t i1_o, size_t i2_o) {
         assert(ti_old != ti_new);
 
         lock(ti_old, i1_o);
@@ -839,7 +821,6 @@ private:
                 //    LIBCUCKOO_DBG("Im the chosen one! %zu\n", cuckoo_size( ti_old ) );
                 };
                 cuckoo_expand_end(ti_old, ti_new);
-                finished_migrating = true;
             }
         }
         return true;
