@@ -410,6 +410,9 @@ public:
             // LIBCUCKOO_DBG("result is failure_key_moved or failure (too full)! with new pointer");
             res = insert_one(ti_new, hv, key, val, i1_n, i2_n);
             
+            /*LIBCUCKOO_DBG("hashpower = %zu, %zu, hash_items = %zu,%zu, load factor = %.2f,%.2f), need to increase hashpower\n",
+                      ti_old->hashpower_, ti_new->hashpower_, cuckoo_size(ti_old), cuckoo_size(ti_new),
+                      cuckoo_loadfactor(ti_old), cuckoo_loadfactor(ti_new) );*/
             // key moved from new table, meaning that an even newer table was created
             if (res == failure_key_moved || res == failure) {
                 LIBCUCKOO_DBG("Key already moved from new table, or already filled...that was fast, %d\n", res);
@@ -808,7 +811,6 @@ private:
     /* Tries to migrate the two buckets that an attempted insert could go to.
      * Also ensures trying to migrate a new bucket. This invariant ensures that we never
      * fill up the new table before the old table has finished migrating.
-     * TODO: Can optimistically check and lock only if necessary
      */
     bool migrate_something(TableInfo *ti_old, TableInfo *ti_new, 
                                size_t i1_o, size_t i2_o, bool& finished_migrating) {
@@ -823,14 +825,22 @@ private:
         unlock(ti_old, i2_o);
 
         size_t new_migrate_bucket = ti_old->migrate_bucket_ind.num.fetch_add(1, std::memory_order_relaxed);
-        
+
+        //all threads wait on one expansion end thread to terminate? Alternatively, each waits on cuckoo_size to
+        //go to 0 and then free for all
         if( new_migrate_bucket >= hashsize(ti_old->hashpower_) ) {
-            cuckoo_expand_end(ti_old, ti_new);
-            finished_migrating = true;
+            while( new_table_info.load() == ti_new );
         } else {
             lock(ti_old, new_migrate_bucket);
             try_migrate_bucket(ti_old, ti_new, new_migrate_bucket);
             unlock(ti_old, new_migrate_bucket);
+            if( new_migrate_bucket == hashsize(ti_old->hashpower_) - 1 ) {
+                while(cuckoo_size( ti_old ) != 0 ) {
+                //    LIBCUCKOO_DBG("Im the chosen one! %zu\n", cuckoo_size( ti_old ) );
+                };
+                cuckoo_expand_end(ti_old, ti_new);
+                finished_migrating = true;
+            }
         }
         return true;
     }
@@ -860,7 +870,7 @@ private:
             res = insert_one(ti_new, hv, key, val, i1, i2);
 
             if( res != ok ) {
-                LIBCUCKOO_DBG("hashpower = %zu, %zu, hash_items = %zu,%zu, load factor = %.2f,%.2f), need to increase hashpower\n",
+                LIBCUCKOO_DBG("In try_migrate_bucket: hashpower = %zu, %zu, hash_items = %zu,%zu, load factor = %.2f,%.2f), need to increase hashpower\n",
                       ti_old->hashpower_, ti_new->hashpower_, cuckoo_size(ti_old), cuckoo_size(ti_new),
                       cuckoo_loadfactor(ti_old), cuckoo_loadfactor(ti_new) );
                 exit(1);
@@ -1661,13 +1671,13 @@ private:
 
     /* count_migrated_buckets returns the number of migrated buckets in the given
      * table. */
-    /*size_t count_migrated_buckets(const TableInfo *ti) {
+    size_t count_migrated_buckets(const TableInfo *ti) {
         size_t num_migrated = 0;
         for (size_t i = 0; i < ti->num_inserts.size(); i++) {
             num_migrated += ti->num_migrated_buckets[i].num.load();
         }
         return num_migrated;
-    }*/
+    }
 
     /* cuckoo_clear empties the table, calling the destructors of all
      * the elements it removes from the table. It assumes the locks
@@ -1706,13 +1716,6 @@ private:
         return 1.0 * cuckoo_size(ti) / SLOT_PER_BUCKET / hashsize(ti->hashpower_);
     }
 
-    // expansion_lock serializes functions that call
-    // snapshot_and_lock_all, thereby ensuring that multiple
-    // expansions and iterator constructions cannot occur
-    // simultaneously.
-    std::mutex expansion_lock;
-    std::mutex migrate_all_lock;
-
     /* cuckoo_expand_start tries to create a new table, succeeding as long as 
      * there is no ongoing expansion and no other thread has already created a new table
      * (new_table_pointer != nullptr) */
@@ -1722,7 +1725,8 @@ private:
         TableInfo *ti_new_expected = nullptr;
         snapshot_lock.lock();
         snapshot_both_no_hazard( ti_old_actual, ti_new_actual);
-        //LIBCUCKOO_DBG( "%p, %p    %p, %p\n", ti_old_expected, ti_old_actual, ti_new_expected, ti_new_actual);
+        //LIBCUCKOO_DBG( "start expand %p, %p    %p, %p\n", ti_old_expected, ti_old_actual, ti_new_expected, ti_new_actual);
+        
         //we only want to create a new table if there is no ongoing expansion already
         //Also accouunts for possibility of somebody already swapping the table pointer
         if (ti_old_expected != ti_old_actual || ti_new_expected != ti_new_actual) {
@@ -1730,10 +1734,9 @@ private:
             return failure_under_expansion;
         }
 
-        new_table_info = new TableInfo(n);
+        new_table_info.store(new TableInfo(n));
         cuckoo_clear(new_table_info);
         snapshot_lock.unlock();
-        LIBCUCKOO_DBG("Finished cuckoo expand start without failing!");
         return ok;
     }
 
@@ -1747,20 +1750,22 @@ private:
         TableInfo *ti_new_actual;
         snapshot_lock.lock();
         snapshot_both_no_hazard( ti_old_actual, ti_new_actual);
+        // LIBCUCKOO_DBG( "end expand %p, %p    %p, %p\n", ti_old_expected, ti_old_actual, ti_new_expected, ti_new_actual);
 
         if (ti_old_expected != ti_old_actual || ti_new_expected != ti_new_actual) {
             snapshot_lock.unlock();
             return failure_under_expansion;
         }
-
-        table_info = ti_new_expected;
-        new_table_info = nullptr;
+        // LIBCUCKOO_DBG( "Size of old table is %zu, new one is %zu", cuckoo_size(ti_old_actual), cuckoo_size( ti_new_expected));
+        assert( cuckoo_size(ti_old_actual) == 0 );
+        table_info.store(ti_new_expected);
+        new_table_info.store(nullptr);
 
         // Rather than deleting ti now, we store it in
         // old_table_infos. The hazard pointer manager will delete it
         // if no other threads are using the pointer.
         old_table_infos.push_back(ti_old_expected);
-        global_hazard_pointers.delete_unused(old_table_infos);
+        //global_hazard_pointers.delete_unused(old_table_infos);
 
         snapshot_lock.unlock();
         return ok;
