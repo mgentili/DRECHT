@@ -1273,7 +1273,6 @@ private:
         return x.depth;
     }
 
-
     /* cuckoopath_move moves keys along the given cuckoo path in order
      * to make an empty slot in one of the buckets in cuckoo_insert.
      * Before the start of this function, the two insert-locked
@@ -1618,6 +1617,30 @@ private:
      * storing the value in the val if it finds the key. It expects
      * the locks to be taken and released outside the function. */
     static cuckoo_status cuckoo_find(const key_type& key, mapped_type& val,
+                                     const size_t hv, const TableInfo *ti,
+                                     const size_t i1, const size_t i2) {
+        cuckoo_status res1, res2;
+        res1 = try_read_from_bucket(ti, key, val, i1);
+        if (res1 == ok || !ti->buckets_[i1].need_check_alternate) {
+            return res1;
+        } 
+
+        res2 = try_read_from_bucket(ti, key, val, i2);
+        if(res2 == ok) {
+            return ok;
+        }
+
+        if (res1 == failure_key_moved || res2 == failure_key_moved) {
+            return failure_key_moved;
+        }
+
+        return failure_key_not_found;
+    }
+
+    /* cuckoo_find searches the table for the given key and value,
+     * storing the value in the val if it finds the key. It expects
+     * the locks to be taken and released outside the function. */
+    static cuckoo_status cuckoo_find_old(const key_type& key, mapped_type& val,
                                      const size_t hv, const TableInfo *ti,
                                      const size_t i1, const size_t i2) {
         cuckoo_status res1, res2;
