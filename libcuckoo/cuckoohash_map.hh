@@ -56,16 +56,10 @@ class cuckoohash_map {
         }
 
         inline void lock() {
-        RETRY:
             size_t start_version = get_version();
-            while( true ) {
-                if( start_version & 1 ) {
-                    goto RETRY;
-                }
-                if( num.compare_exchange_weak(
-                    start_version, start_version+1, std::memory_order_release, std::memory_order_relaxed)) {
-                return;
-                }
+            while( (start_version & 1) || !num.compare_exchange_strong(
+                    start_version, start_version+1, std::memory_order_release, std::memory_order_relaxed) ) {
+                start_version = get_version();
             }
         }
 
@@ -75,14 +69,8 @@ class cuckoohash_map {
 
         inline bool try_lock() {
             size_t start_version = get_version();
-            if( start_version & 1 ) {
-                return false;
-            }
-            if( num.compare_exchange_weak(
-                start_version, start_version+1, std::memory_order_release, std::memory_order_relaxed)) {
-                return true;
-            }
-            return false;
+            return( !(start_version & 1) && num.compare_exchange_strong(
+                    start_version, start_version+1, std::memory_order_release, std::memory_order_relaxed) );
         }
     } __attribute__((aligned(64)));
 
@@ -633,8 +621,7 @@ private:
             return res1;
         } else {
             assert( res1 == ok ); 
-            // if nothing's ever been moved out of this bucket and there's an open space,
-            // we can directly add it in
+            
             if( !ti->buckets_[i1].need_check_alternate && open1 != -1 ) {
                 add_to_bucket(ti, key, val, i1, open1);
                 unlock( ti, i1 );
@@ -1775,7 +1762,7 @@ private:
         // old_table_infos. The hazard pointer manager will delete it
         // if no other threads are using the pointer.
         old_table_infos.push_back(ti_old_expected);
-        //global_hazard_pointers.delete_unused(old_table_infos);
+        global_hazard_pointers.delete_unused(old_table_infos);
 
         snapshot_lock.unlock();
         return ok;
