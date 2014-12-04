@@ -66,7 +66,7 @@ public:
         for (size_t i = 0; i < threads.size(); i++) {
             threads[i].join();
         }
-
+        std::cout << "Finished joining all threads, size of table is" << smalltable.size() << std::endl;
         // Fills up nonkeys with keys that aren't in the table
         std::uniform_int_distribution<KeyType> k_dist(std::numeric_limits<KeyType>::min(), std::numeric_limits<KeyType>::max());
         for (size_t i = 0; i < numkeys; i++) {

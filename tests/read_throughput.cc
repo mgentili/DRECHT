@@ -49,6 +49,9 @@ size_t test_len = 10;
 // Whether to use strings as the key
 bool use_strings = false;
 
+Json::Value info;
+Json::StyledWriter writer;
+
 template <class KType>
 struct thread_args {
     typename std::vector<KType>::iterator begin;
@@ -109,7 +112,7 @@ public:
     // We allocate the vectors with the total amount of space in the
     // table, which is bucket_count() * SLOT_PER_BUCKET
     ReadEnvironment()
-        : numkeys((1U<<power)*SLOT_PER_BUCKET), table(numkeys), keys(numkeys) {
+        : numkeys((1U<<power)*SLOT_PER_BUCKET), keys(numkeys) {
         // Sets up the random number generator
         if (seed == 0) {
             seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -117,6 +120,7 @@ public:
         //std::cout << "seed = " << seed << std::endl;
         gen.seed(seed);
 
+        table.initialize(numkeys);
         // We fill the keys array with integers between numkeys and
         // 2*numkeys, shuffled randomly
         keys[0] = numkeys;
@@ -143,7 +147,11 @@ public:
         ASSERT_TRUE(init_size == keys_per_thread * thread_num);
 
         //std::cout << "Table with capacity " << numkeys << " prefilled to a load factor of " << table.load_factor() << std::endl;
-        std::cout << numkeys << ", " << table.load_factor();
+        //std::cout << numkeys << ", " << table.load_factor();
+        info["test_type"] = "read_throughput";
+        info["num_keys"] = (int) numkeys;
+        info["load"] = table.load_factor();
+        
     }
 
     size_t numkeys;
@@ -160,6 +168,7 @@ void ReadThroughputTest(ReadEnvironment<KType> *env) {
     // We use the first half of the threads to read the init_size
     // elements that are in the table and the other half to read the
     // numkeys-init_size elements that aren't in the table.
+    //const size_t first_threadnum = thread_num;
     const size_t first_threadnum = thread_num / 2;
     const size_t second_threadnum = thread_num - thread_num / 2;
     const size_t in_keys_per_thread = (first_threadnum == 0) ? 0 : env->init_size / first_threadnum;
@@ -189,10 +198,14 @@ void ReadThroughputTest(ReadEnvironment<KType> *env) {
     std::cout << "----------Results----------" << std::endl;
     std::cout << "Number of reads:\t" << total_reads << std::endl;
     std::cout << "Time elapsed:\t" << test_len << " seconds" << std::endl;
-    std::cout << "Throughput: " << std::fixed << total_reads / (double)test_len << " reads/sec" << std::endl;*/
-    std::cout << ", " << total_reads;
+    std::cout << "Throughput: " << std::fixed << total_reads / (double)test_len << " reads/sec" << std::endl;
+    std::cout << ", " << (int) total_reads;
     std::cout << ", " << test_len;
-    std::cout << ", " << total_reads / (double)test_len << std::endl;
+    std::cout << ", " << total_reads / (double)test_len << std::endl;*/
+    info["num_reads"] = (int) total_reads;
+    info["duration"] = (int) test_len;
+    info["throughput"] = total_reads/ (double) test_len;
+    std::cout << writer.write(info) << std::endl;
 }
 
 int main(int argc, char** argv) {

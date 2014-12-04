@@ -91,8 +91,8 @@ public:
         }
     }
 
-    cuckoohash_map<KType, ValType> table;
-    cuckoohash_map<KType, ValType2> table2;
+    cuckoohash_map<KType, ValType, CityHasher<KType>> table;
+    cuckoohash_map<KType, ValType2, CityHasher<KType>> table2;
     std::vector<KType> keys;
     std::vector<ValType> vals;
     std::vector<ValType2> vals2;
@@ -228,6 +228,21 @@ void StressTest(AllEnvironment<KType> *env) {
         }
     }
     EXPECT_EQ(numfilled, env->table.size());
+
+    //make sure everything that should be in table is in table at the end
+    ValType v = 0;
+    ValType2 v2 = 0;
+    for( size_t i = 0; i < env->keys.size(); i++) {
+        KType k = env->keys[i];
+        bool res = env->table.find(k, v);
+        bool res2 = env->table2.find(k, v2);
+        EXPECT_EQ(env->in_table[i], res);
+        EXPECT_EQ(env->in_table[i], res2);
+        if (res) {
+            EXPECT_EQ(v, env->vals[i]);
+            EXPECT_EQ(v2, env->vals2[i]);
+        }
+    }
     std::cout << "----------Results----------" << std::endl;
     std::cout << "Number of inserts:\t" << num_inserts.load() << std::endl;
     std::cout << "Number of deletes:\t" << num_deletes.load() << std::endl;
@@ -250,7 +265,8 @@ int main(int argc, char** argv) {
     parse_flags(argc, argv, "Runs a stress test on inserts, deletes, and finds",
                 args, arg_vars, arg_help, sizeof(args)/sizeof(const char*), flags,
                 flag_vars, flag_help, sizeof(flags)/sizeof(const char*));
-    numkeys = (1L << std::max(20uL, power)) * SLOT_PER_BUCKET;
+    //numkeys = (1L << std::max(20uL, power)) * SLOT_PER_BUCKET;
+    numkeys = (1L << 24uL) * SLOT_PER_BUCKET;
 
     if (use_strings) {
         auto *env = new AllEnvironment<KeyType2>;

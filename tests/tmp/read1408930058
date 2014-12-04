@@ -1,0 +1,153 @@
+{
+   "duration" : 10,
+   "load" : 0.04999995231628418,
+   "num_keys" : 16777216,
+   "num_reads" : 39758466,
+   "test_type" : "read_throughput",
+   "throughput" : 3975846.60
+}
+
+{
+   "duration" : 10,
+   "load" : 0.09999990463256836,
+   "num_keys" : 16777216,
+   "num_reads" : 35863099,
+   "test_type" : "read_throughput",
+   "throughput" : 3586309.90
+}
+
+{
+   "duration" : 10,
+   "load" : 0.1499998569488525,
+   "num_keys" : 16777216,
+   "num_reads" : 38102418,
+   "test_type" : "read_throughput",
+   "throughput" : 3810241.80
+}
+
+{
+   "duration" : 10,
+   "load" : 0.1999998092651367,
+   "num_keys" : 16777216,
+   "num_reads" : 38673665,
+   "test_type" : "read_throughput",
+   "throughput" : 3867366.50
+}
+
+{
+   "duration" : 10,
+   "load" : 0.250,
+   "num_keys" : 16777216,
+   "num_reads" : 36992336,
+   "test_type" : "read_throughput",
+   "throughput" : 3699233.60
+}
+
+{
+   "duration" : 10,
+   "load" : 0.2999999523162842,
+   "num_keys" : 16777216,
+   "num_reads" : 37484966,
+   "test_type" : "read_throughput",
+   "throughput" : 3748496.60
+}
+
+{
+   "duration" : 10,
+   "load" : 0.3499999046325684,
+   "num_keys" : 16777216,
+   "num_reads" : 40489784,
+   "test_type" : "read_throughput",
+   "throughput" : 4048978.40
+}
+
+{
+   "duration" : 10,
+   "load" : 0.3999998569488525,
+   "num_keys" : 16777216,
+   "num_reads" : 38991884,
+   "test_type" : "read_throughput",
+   "throughput" : 3899188.40
+}
+
+{
+   "duration" : 10,
+   "load" : 0.4499998092651367,
+   "num_keys" : 16777216,
+   "num_reads" : 33233234,
+   "test_type" : "read_throughput",
+   "throughput" : 3323323.40
+}
+
+{
+   "duration" : 10,
+   "load" : 0.50,
+   "num_keys" : 16777216,
+   "num_reads" : 38666613,
+   "test_type" : "read_throughput",
+   "throughput" : 3866661.30
+}
+
+{
+   "duration" : 10,
+   "load" : 0.5499999523162842,
+   "num_keys" : 16777216,
+   "num_reads" : 30715227,
+   "test_type" : "read_throughput",
+   "throughput" : 3071522.70
+}
+
+{
+   "duration" : 10,
+   "load" : 0.5999999046325684,
+   "num_keys" : 16777216,
+   "num_reads" : 38025747,
+   "test_type" : "read_throughput",
+   "throughput" : 3802574.70
+}
+
+{
+   "duration" : 10,
+   "load" : 0.6499998569488525,
+   "num_keys" : 16777216,
+   "num_reads" : 39256317,
+   "test_type" : "read_throughput",
+   "throughput" : 3925631.70
+}
+
+{
+   "duration" : 10,
+   "load" : 0.6999998092651367,
+   "num_keys" : 16777216,
+   "num_reads" : 35785882,
+   "test_type" : "read_throughput",
+   "throughput" : 3578588.20
+}
+
+{
+   "duration" : 10,
+   "load" : 0.750,
+   "num_keys" : 16777216,
+   "num_reads" : 35440887,
+   "test_type" : "read_throughput",
+   "throughput" : 3544088.70
+}
+
+{
+   "duration" : 10,
+   "load" : 0.7999999523162842,
+   "num_keys" : 16777216,
+   "num_reads" : 37457441,
+   "test_type" : "read_throughput",
+   "throughput" : 3745744.10
+}
+
+{
+   "duration" : 10,
+   "load" : 0.8499999046325684,
+   "num_keys" : 16777216,
+   "num_reads" : 34400919,
+   "test_type" : "read_throughput",
+   "throughput" : 3440091.90
+}
+

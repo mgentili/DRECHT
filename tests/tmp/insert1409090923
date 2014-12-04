@@ -1,0 +1,648 @@
+{
+   "begin_load" : 0.0,
+   "elapsed_time" : 0.1730880,
+   "end_load" : 0.04999995231628418,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4846436.494731004
+}
+
+{
+   "begin_load" : 0.04999995231628418,
+   "elapsed_time" : 0.1770940000000001,
+   "end_load" : 0.09999990463256836,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4736806.441776682
+}
+
+{
+   "begin_load" : 0.09999990463256836,
+   "elapsed_time" : 0.1855020,
+   "end_load" : 0.1499998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4522107.578354950
+}
+
+{
+   "begin_load" : 0.1499998569488525,
+   "elapsed_time" : 0.2168620,
+   "end_load" : 0.1999998092651367,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3868174.230616705
+}
+
+{
+   "begin_load" : 0.1999998092651367,
+   "elapsed_time" : 0.2179860,
+   "end_load" : 0.2499997615814209,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3848228.785334838
+}
+
+{
+   "begin_load" : 0.250,
+   "elapsed_time" : 0.1906860,
+   "end_load" : 0.2999999523162842,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4399169.314999528
+}
+
+{
+   "begin_load" : 0.2999999523162842,
+   "elapsed_time" : 0.1854740000000001,
+   "end_load" : 0.3499999046325684,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4522790.256316247
+}
+
+{
+   "begin_load" : 0.3499999046325684,
+   "elapsed_time" : 0.1797190,
+   "end_load" : 0.3999998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4667620.006788376
+}
+
+{
+   "begin_load" : 0.3999998569488525,
+   "elapsed_time" : 0.1923650,
+   "end_load" : 0.4499998092651367,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4360772.489798040
+}
+
+{
+   "begin_load" : 0.4499998092651367,
+   "elapsed_time" : 0.221720,
+   "end_load" : 0.4999997615814209,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3783420.53039870
+}
+
+{
+   "begin_load" : 0.50,
+   "elapsed_time" : 0.2265910,
+   "end_load" : 0.5499999523162842,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3702088.785521049
+}
+
+{
+   "begin_load" : 0.5499999523162842,
+   "elapsed_time" : 0.2088990,
+   "end_load" : 0.5999999046325684,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4015624.775609266
+}
+
+{
+   "begin_load" : 0.5999999046325684,
+   "elapsed_time" : 0.2410230,
+   "end_load" : 0.6499998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3480414.732203981
+}
+
+{
+   "begin_load" : 0.6499998569488525,
+   "elapsed_time" : 0.2484710,
+   "end_load" : 0.6999998092651367,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3376088.155156940
+}
+
+{
+   "begin_load" : 0.6999998092651367,
+   "elapsed_time" : 0.3090180,
+   "end_load" : 0.7499997615814209,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2714599.149564103
+}
+
+{
+   "begin_load" : 0.750,
+   "elapsed_time" : 0.4140030,
+   "end_load" : 0.7999999523162842,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2026217.201324628
+}
+
+{
+   "begin_load" : 0.7999999523162842,
+   "elapsed_time" : 0.5447290,
+   "end_load" : 0.8499999046325684,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 1539958.401333507
+}
+
+{
+   "begin_load" : 0.8499999046325684,
+   "elapsed_time" : 0.8865160,
+   "end_load" : 0.8999998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 946243.4970152823
+}
+
+{
+   "begin_load" : 0.0,
+   "elapsed_time" : 0.2045830,
+   "end_load" : 0.04999995231628418,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4100340.693019459
+}
+
+{
+   "begin_load" : 0.04999995231628418,
+   "elapsed_time" : 0.19710,
+   "end_load" : 0.09999990463256836,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4256012.176560122
+}
+
+{
+   "begin_load" : 0.09999990463256836,
+   "elapsed_time" : 0.1842570,
+   "end_load" : 0.1499998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4552662.856770706
+}
+
+{
+   "begin_load" : 0.1499998569488525,
+   "elapsed_time" : 0.1864640,
+   "end_load" : 0.1999998092651367,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4498777.243864767
+}
+
+{
+   "begin_load" : 0.1999998092651367,
+   "elapsed_time" : 0.2315640,
+   "end_load" : 0.2499997615814209,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3622583.821319376
+}
+
+{
+   "begin_load" : 0.250,
+   "elapsed_time" : 0.2114630,
+   "end_load" : 0.2999999523162842,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3966935.113944284
+}
+
+{
+   "begin_load" : 0.2999999523162842,
+   "elapsed_time" : 0.2329630,
+   "end_load" : 0.3499999046325684,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3600829.316243352
+}
+
+{
+   "begin_load" : 0.3499999046325684,
+   "elapsed_time" : 0.1716080,
+   "end_load" : 0.3999998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4888233.648780944
+}
+
+{
+   "begin_load" : 0.3999998569488525,
+   "elapsed_time" : 0.2026080,
+   "end_load" : 0.4499998092651367,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4140310.352996920
+}
+
+{
+   "begin_load" : 0.4499998092651367,
+   "elapsed_time" : 0.2426860,
+   "end_load" : 0.4999997615814209,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3456565.273645781
+}
+
+{
+   "begin_load" : 0.50,
+   "elapsed_time" : 0.2256850,
+   "end_load" : 0.5499999523162842,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3716950.617010435
+}
+
+{
+   "begin_load" : 0.5499999523162842,
+   "elapsed_time" : 0.2145340,
+   "end_load" : 0.5999999046325684,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3910149.440181976
+}
+
+{
+   "begin_load" : 0.5999999046325684,
+   "elapsed_time" : 0.2556310,
+   "end_load" : 0.6499998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3281526.888366434
+}
+
+{
+   "begin_load" : 0.6499998569488525,
+   "elapsed_time" : 0.2800210,
+   "end_load" : 0.6999998092651367,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2995703.893636548
+}
+
+{
+   "begin_load" : 0.6999998092651367,
+   "elapsed_time" : 0.3157860,
+   "end_load" : 0.7499997615814209,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2656419.220611427
+}
+
+{
+   "begin_load" : 0.750,
+   "elapsed_time" : 0.3934160,
+   "end_load" : 0.7999999523162842,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2132246.782032251
+}
+
+{
+   "begin_load" : 0.7999999523162842,
+   "elapsed_time" : 0.5288640,
+   "end_load" : 0.8499999046325684,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 1586154.474496279
+}
+
+{
+   "begin_load" : 0.8499999046325684,
+   "elapsed_time" : 0.8793920000000001,
+   "end_load" : 0.8999998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 953909.0644445253
+}
+
+{
+   "begin_load" : 0.0,
+   "elapsed_time" : 0.1795110,
+   "end_load" : 0.04999995231628418,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4673028.393803165
+}
+
+{
+   "begin_load" : 0.04999995231628418,
+   "elapsed_time" : 0.1714140,
+   "end_load" : 0.09999990463256836,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4893765.970107459
+}
+
+{
+   "begin_load" : 0.09999990463256836,
+   "elapsed_time" : 0.1849330,
+   "end_load" : 0.1499998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4536021.153606982
+}
+
+{
+   "begin_load" : 0.1499998569488525,
+   "elapsed_time" : 0.1744249999999999,
+   "end_load" : 0.1999998092651367,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4809287.659452489
+}
+
+{
+   "begin_load" : 0.1999998092651367,
+   "elapsed_time" : 0.1814510,
+   "end_load" : 0.2499997615814209,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4623066.282357220
+}
+
+{
+   "begin_load" : 0.250,
+   "elapsed_time" : 0.191210,
+   "end_load" : 0.2999999523162842,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4387113.644683855
+}
+
+{
+   "begin_load" : 0.2999999523162842,
+   "elapsed_time" : 0.1890390,
+   "end_load" : 0.3499999046325684,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4437497.024423532
+}
+
+{
+   "begin_load" : 0.3499999046325684,
+   "elapsed_time" : 0.1864640,
+   "end_load" : 0.3999998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4498777.243864767
+}
+
+{
+   "begin_load" : 0.3999998569488525,
+   "elapsed_time" : 0.1941170,
+   "end_load" : 0.4499998092651367,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4321414.404714683
+}
+
+{
+   "begin_load" : 0.4499998092651367,
+   "elapsed_time" : 0.2071620,
+   "end_load" : 0.4999997615814209,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4049294.754829553
+}
+
+{
+   "begin_load" : 0.50,
+   "elapsed_time" : 0.2019010,
+   "end_load" : 0.5499999523162842,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 4154808.544781849
+}
+
+{
+   "begin_load" : 0.5499999523162842,
+   "elapsed_time" : 0.2648580,
+   "end_load" : 0.5999999046325684,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3167206.578619487
+}
+
+{
+   "begin_load" : 0.5999999046325684,
+   "elapsed_time" : 0.2521890,
+   "end_load" : 0.6499998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3326314.787718735
+}
+
+{
+   "begin_load" : 0.6499998569488525,
+   "elapsed_time" : 0.2512230,
+   "end_load" : 0.6999998092651367,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3339105.097861263
+}
+
+{
+   "begin_load" : 0.6999998092651367,
+   "elapsed_time" : 0.3080470,
+   "end_load" : 0.7499997615814209,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2723155.882056959
+}
+
+{
+   "begin_load" : 0.750,
+   "elapsed_time" : 0.3752540,
+   "end_load" : 0.7999999523162842,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2235445.858005511
+}
+
+{
+   "begin_load" : 0.7999999523162842,
+   "elapsed_time" : 0.5406270,
+   "end_load" : 0.8499999046325684,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 1551642.814731784
+}
+
+{
+   "begin_load" : 0.8499999046325684,
+   "elapsed_time" : 0.9054430,
+   "end_load" : 0.8999998569488525,
+   "final_table_size" : 16777216,
+   "initial_table_size" : 16777216,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 926463.6205702623
+}
+

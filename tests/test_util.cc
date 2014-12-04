@@ -10,6 +10,9 @@
 #include <mutex>
 #include <libcuckoo/cuckoohash_map.hh>
 #include <libcuckoo/city_hasher.hh>
+#include <jsoncpp/json/json.h>
+#include <string>
+#include <map>
 
 std::mutex print_lock;
 typedef std::lock_guard<std::mutex> mutex_guard;

@@ -1,0 +1,180 @@
+{
+   "begin_load" : 0.0,
+   "elapsed_time" : 0.3508450,
+   "end_load" : 0.04999995231628418,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2390970.371531588
+}
+
+{
+   "begin_load" : 0.04999995231628418,
+   "elapsed_time" : 0.261750,
+   "end_load" : 0.09999990463256836,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3204813.753581662
+}
+
+{
+   "begin_load" : 0.09999990463256836,
+   "elapsed_time" : 0.259580,
+   "end_load" : 0.1499998569488525,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3231604.900223437
+}
+
+{
+   "begin_load" : 0.1499998569488525,
+   "elapsed_time" : 0.2743010,
+   "end_load" : 0.1999998092651367,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3058173.320549323
+}
+
+{
+   "begin_load" : 0.1999998092651367,
+   "elapsed_time" : 0.278270,
+   "end_load" : 0.2499997615814209,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3014554.209939987
+}
+
+{
+   "begin_load" : 0.250,
+   "elapsed_time" : 0.2772960,
+   "end_load" : 0.2999999523162842,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3025142.807685650
+}
+
+{
+   "begin_load" : 0.2999999523162842,
+   "elapsed_time" : 0.2773380,
+   "end_load" : 0.3499999046325684,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 3024684.680786622
+}
+
+{
+   "begin_load" : 0.3499999046325684,
+   "elapsed_time" : 0.2797880,
+   "end_load" : 0.3999998569488525,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2998198.636110197
+}
+
+{
+   "begin_load" : 0.3999998569488525,
+   "elapsed_time" : 0.3756690,
+   "end_load" : 0.4499998092651367,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2232976.370155642
+}
+
+{
+   "begin_load" : 0.4499998092651367,
+   "elapsed_time" : 0.2893990,
+   "end_load" : 0.4999997615814209,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2898627.845984264
+}
+
+{
+   "begin_load" : 0.50,
+   "elapsed_time" : 0.3429430,
+   "end_load" : 0.5499999523162842,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2446062.465191009
+}
+
+{
+   "begin_load" : 0.5499999523162842,
+   "elapsed_time" : 0.348530,
+   "end_load" : 0.5999999046325684,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2406851.634005681
+}
+
+{
+   "begin_load" : 0.5999999046325684,
+   "elapsed_time" : 0.3953350,
+   "end_load" : 0.6499998569488525,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 2121896.619322853
+}
+
+{
+   "begin_load" : 0.6499998569488525,
+   "elapsed_time" : 0.458220,
+   "end_load" : 0.6999998092651367,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 1830692.680371874
+}
+
+{
+   "begin_load" : 0.6999998092651367,
+   "elapsed_time" : 0.5652239999999999,
+   "end_load" : 0.7499997615814209,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 1484119.570294255
+}
+
+{
+   "begin_load" : 0.750,
+   "elapsed_time" : 0.6375980,
+   "end_load" : 0.7999999523162842,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 1315656.573577709
+}
+
+{
+   "begin_load" : 0.7999999523162842,
+   "elapsed_time" : 0.8947130,
+   "end_load" : 0.8499999046325684,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 937574.3953647707
+}
+
+{
+   "begin_load" : 0.8499999046325684,
+   "elapsed_time" : 1.4019970,
+   "end_load" : 0.8999998569488525,
+   "num_inserts" : 838860,
+   "num_keys" : 16777216,
+   "test_type" : "insert_throughput",
+   "throughput" : 598332.2360889503
+}
+
